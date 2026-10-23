@@ -27,12 +27,16 @@ LDFLAGS     := -s -w -X main.version=$(VERSION)
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 
-.PHONY: all build build-all build-one install test vet fmt check clean help
+GO_SOURCES := $(shell find . -name vendor -prune -o -name .git -prune -o -name '*.go' -print) go.mod go.sum
+
+.PHONY: all build-all build-one install test vet fmt check clean help print-env
 
 all: build
 
 ## build: compile for this host into ./$(BINARY)
-build:
+build: $(BINARY)
+
+$(BINARY): $(GO_SOURCES)
 	$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY) $(PKG)
 
 ## build-all: cross-compile every platform in PLATFORMS into $(DIST)/
@@ -42,8 +46,9 @@ build-all:
 		os=$${p%/*}; arch=$${p#*/}; \
 		out=$(DIST)/$(BINARY)-$$os-$$arch; \
 		if [ "$$os" = windows ]; then out=$$out.exe; fi; \
-		echo ">> $$os/$$arch -> $$out"; \
-		$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG); \
+		printf ">> %s/%s -> " "$$os" "$$arch"; \
+		GOOS=$$os GOARCH=$$arch $(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG); \
+		echo "$$out"; \
 	done
 
 ## build-one: cross-compile a single platform, e.g. make build-one PLATFORM=linux/arm64
@@ -52,8 +57,9 @@ build-one:
 	@set -e; os=$${PLATFORM%/*}; arch=$${PLATFORM#*/}; \
 		out=$(DIST)/$(BINARY)-$$os-$$arch; \
 		if [ "$$os" = windows ]; then out=$$out.exe; fi; \
-		echo ">> $$os/$$arch -> $$out"; \
-		$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG)
+		printf ">> %s/%s -> " "$$os" "$$arch"; \
+		GOOS=$$os GOARCH=$$arch $(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG); \
+		echo "$$out"
 
 ## install: go install onto GOBIN/GOPATH
 install:
@@ -73,7 +79,11 @@ fmt:
 
 ## check: formatting gate, vet, tests, and the full cross-compile matrix
 check:
-	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+	@files=$$(find . -name vendor -prune -o -name .git -prune -o -name '*.go' -print); \
+	if [ -n "$$files" ]; then \
+		out=$$(gofmt -l $$files); \
+		if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi; \
+	fi
 	$(GO) vet ./...
 	$(GO) test ./...
 	$(MAKE) build-all
@@ -94,6 +104,8 @@ help:
 	@echo "  check       gofmt gate + vet + test + build-all"
 	@echo "  clean       remove $(DIST)/ and ./$(BINARY)"
 	@echo "  help        this message"
+	@echo "Use -B / --always-make to force run a target"
 
-print_file_vars:
-    $(foreach v, $(.VARIABLES), $(if $(filter file,$(origin $(v))), $(info $(v)=$($(v)))))
+print-env:
+	@$(foreach v, $(.VARIABLES), $(if $(filter file,$(origin $(v))), $(info $(v)=$($(v)))))
+	@true
