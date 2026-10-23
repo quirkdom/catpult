@@ -1,0 +1,99 @@
+# catpult build tooling.
+#
+# Common targets:
+#   make build                 host binary at ./catpult
+#   make build-all             release binaries for every target in PLATFORMS, into dist/
+#   make build-one PLATFORM=windows/amd64
+#   make test vet fmt check clean help
+
+BINARY  := catpult
+PKG     := ./cmd/catpult
+DIST    := dist
+GO      ?= go
+
+# Stamp the binary; override with VERSION=... (make VERSION=v1.2.3 build).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+# catpult has no cgo dependency; keep cross builds pure Go and static.
+export CGO_ENABLED := 0
+
+# Tailcat build tags for space savings (matches tailcat's build-tags.txt).
+# Includes base tags (netgo, osusergo, omitidna, omitpemdecrypt) and omits
+# all tailscale.com features tailcat doesn't need.
+TAILCAT_TAGS := $(shell cd ~/Developer/tailcat && go run ./internal/buildtags/printtags 2>/dev/null || cat ~/Developer/tailcat/build-tags.txt)
+
+BUILD_FLAGS := -trimpath -tags '$(TAILCAT_TAGS)'
+LDFLAGS     := -s -w -X main.version=$(VERSION)
+
+PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
+
+.PHONY: all build build-all build-one install test vet fmt check clean help
+
+all: build
+
+## build: compile for this host into ./$(BINARY)
+build:
+	$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY) $(PKG)
+
+## build-all: cross-compile every platform in PLATFORMS into $(DIST)/
+build-all:
+	@mkdir -p $(DIST)
+	@set -e; for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		out=$(DIST)/$(BINARY)-$$os-$$arch; \
+		if [ "$$os" = windows ]; then out=$$out.exe; fi; \
+		echo ">> $$os/$$arch -> $$out"; \
+		$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG); \
+	done
+
+## build-one: cross-compile a single platform, e.g. make build-one PLATFORM=linux/arm64
+build-one:
+	@mkdir -p $(DIST)
+	@set -e; os=$${PLATFORM%/*}; arch=$${PLATFORM#*/}; \
+		out=$(DIST)/$(BINARY)-$$os-$$arch; \
+		if [ "$$os" = windows ]; then out=$$out.exe; fi; \
+		echo ">> $$os/$$arch -> $$out"; \
+		$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o "$$out" $(PKG)
+
+## install: go install onto GOBIN/GOPATH
+install:
+	$(GO) install $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' $(PKG)
+
+## test: run the test suite
+test:
+	$(GO) test ./...
+
+## vet: run go vet
+vet:
+	$(GO) vet ./...
+
+## fmt: gofmt the tree in place
+fmt:
+	$(GO) fmt ./...
+
+## check: formatting gate, vet, tests, and the full cross-compile matrix
+check:
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
+	$(GO) vet ./...
+	$(GO) test ./...
+	$(MAKE) build-all
+
+## clean: remove the build outputs this Makefile produces
+clean:
+	rm -rf $(DIST) $(BINARY)
+
+help:
+	@echo "catpult make targets (VERSION=$(VERSION)):"
+	@echo "  build       host binary -> ./$(BINARY)"
+	@echo "  build-all   cross-compile PLATFORMS -> $(DIST)/"
+	@echo "  build-one   make build-one PLATFORM=linux/arm64"
+	@echo "  install     go install to GOBIN/GOPATH"
+	@echo "  test        go test ./..."
+	@echo "  vet         go vet ./..."
+	@echo "  fmt         go fmt ./..."
+	@echo "  check       gofmt gate + vet + test + build-all"
+	@echo "  clean       remove $(DIST)/ and ./$(BINARY)"
+	@echo "  help        this message"
+
+print_file_vars:
+    $(foreach v, $(.VARIABLES), $(if $(filter file,$(origin $(v))), $(info $(v)=$($(v)))))

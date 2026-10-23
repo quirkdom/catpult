@@ -1,0 +1,15 @@
+# Binaries
+/catpult
+/dist/
+/bin/
+*.exe
+*.out
+
+# Go build cache / test cache
+/vendor/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
