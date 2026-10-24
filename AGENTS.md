@@ -7,6 +7,8 @@ Requires Go 1.27+ (`go version` → `go1.27.1 darwin/arm64`).
 ```sh
 make build       # host binary -> ./catpult
 make build-all   # cross-compile PLATFORMS -> dist/ (linux, windows, darwin; amd64 + arm64)
+make package     # cross-compile and package into archives (.tar.gz/.zip) in dist/
+make checksums   # generate SHA256 checksums in dist/checksums.txt
 make check       # gofmt gate + vet + test + build-all
 make help
 ```

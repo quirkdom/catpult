@@ -20,7 +20,7 @@ export CGO_ENABLED := 0
 # Tailcat build tags for space savings (matches tailcat's build-tags.txt).
 # Includes base tags (netgo, osusergo, omitidna, omitpemdecrypt) and omits
 # all tailscale.com features tailcat doesn't need.
-TAILCAT_TAGS := $(shell cd ~/Developer/tailcat && go run ./internal/buildtags/printtags 2>/dev/null || cat ~/Developer/tailcat/build-tags.txt)
+TAILCAT_TAGS ?= $(shell (cd ~/Developer/tailcat && go run ./internal/buildtags/printtags) 2>/dev/null || cat ~/Developer/tailcat/build-tags.txt 2>/dev/null)
 
 BUILD_FLAGS := -trimpath -tags '$(TAILCAT_TAGS)'
 LDFLAGS     := -s -w -X main.version=$(VERSION)
@@ -29,7 +29,7 @@ PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 win
 
 GO_SOURCES := $(shell find . -name vendor -prune -o -name .git -prune -o -name '*.go' -print) go.mod go.sum
 
-.PHONY: all build-all build-one install test vet fmt check clean help print-env
+.PHONY: all build-all build-one install test vet fmt check package checksums clean help print-env
 
 all: build
 
@@ -88,6 +88,31 @@ check:
 	$(GO) test ./...
 	$(MAKE) build-all
 
+## package: package cross-compiled binaries into archives
+package: build-all
+	@set -e; for p in $(PLATFORMS); do \
+		os=$${p%/*}; arch=$${p#*/}; \
+		src=$(DIST)/$(BINARY)-$$os-$$arch; \
+		stage=$(DIST)/stage-$$os-$$arch; \
+		mkdir -p "$$stage"; \
+		if [ "$$os" = windows ]; then \
+			cp "$$src.exe" "$$stage/$(BINARY).exe"; \
+			cp README.md "$$stage/"; \
+			(cd "$$stage" && zip -q -r "../$(BINARY)-$$os-$$arch.zip" .); \
+		else \
+			cp "$$src" "$$stage/$(BINARY)"; \
+			cp README.md "$$stage/"; \
+			tar -czf "$(DIST)/$(BINARY)-$$os-$$arch.tar.gz" -C "$$stage" .; \
+		fi; \
+		rm -rf "$$stage"; \
+		echo ">> packaged $(DIST)/$(BINARY)-$$os-$$arch"; \
+	done
+
+## checksums: generate sha256 checksums in $(DIST)/
+checksums:
+	@cd $(DIST) && rm -f checksums.txt && (sha256sum $(BINARY)* 2>/dev/null || shasum -a 256 $(BINARY)*) > checksums.txt
+	@echo ">> generated $(DIST)/checksums.txt"
+
 ## clean: remove the build outputs this Makefile produces
 clean:
 	rm -rf $(DIST) $(BINARY)
@@ -102,6 +127,8 @@ help:
 	@echo "  vet         go vet ./..."
 	@echo "  fmt         go fmt ./..."
 	@echo "  check       gofmt gate + vet + test + build-all"
+	@echo "  package     package binaries into archives (.tar.gz / .zip) in $(DIST)/"
+	@echo "  checksums   generate sha256 checksums in $(DIST)/checksums.txt"
 	@echo "  clean       remove $(DIST)/ and ./$(BINARY)"
 	@echo "  help        this message"
 	@echo "Use -B / --always-make to force run a target"
