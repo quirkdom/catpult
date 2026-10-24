@@ -10,6 +10,8 @@ make build-all   # cross-compile PLATFORMS -> dist/ (linux, windows, darwin; amd
 make package     # cross-compile and package into archives (.tar.gz/.zip) in dist/
 make checksums   # generate SHA256 checksums in dist/checksums.txt
 make check       # gofmt gate + vet + test + build-all
+make clean       # remove dist/ and ./catpult
+make deep-clean  # clean build outputs + purge Go build & test caches
 make help
 ```
 

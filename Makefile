@@ -27,9 +27,9 @@ LDFLAGS     := -s -w -X main.version=$(VERSION)
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
 
-GO_SOURCES := $(shell find . -name vendor -prune -o -name .git -prune -o -name '*.go' -print) go.mod go.sum
+GO_SOURCES := $(shell find . -type f -name '*.go' -not -path "./vendor/*") go.mod go.sum
 
-.PHONY: all build-all build-one install test vet fmt check package checksums clean help print-env
+.PHONY: all build-all build-one install test vet fmt check package checksums clean deep-clean help print-env
 
 all: build
 
@@ -79,14 +79,14 @@ fmt:
 
 ## check: formatting gate, vet, tests, and the full cross-compile matrix
 check:
-	@files=$$(find . -name vendor -prune -o -name .git -prune -o -name '*.go' -print); \
+	@files=$$(find . -type f -name '*.go' -not -path "./vendor/*"); \
 	if [ -n "$$files" ]; then \
 		out=$$(gofmt -l $$files); \
 		if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi; \
 	fi
 	$(GO) vet ./...
 	$(GO) test ./...
-	$(MAKE) build-all
+	@$(MAKE) build-all
 
 ## package: package cross-compiled binaries into archives
 package: build-all
@@ -117,6 +117,11 @@ checksums:
 clean:
 	rm -rf $(DIST) $(BINARY)
 
+## deep-clean: clean build artifacts, bin/ outputs, and purge Go build & test caches
+deep-clean: clean
+	rm -rf bin *.out coverage.html
+	$(GO) clean -cache -testcache
+
 help:
 	@echo "catpult make targets (VERSION=$(VERSION)):"
 	@echo "  build       host binary -> ./$(BINARY)"
@@ -130,6 +135,7 @@ help:
 	@echo "  package     package binaries into archives (.tar.gz / .zip) in $(DIST)/"
 	@echo "  checksums   generate sha256 checksums in $(DIST)/checksums.txt"
 	@echo "  clean       remove $(DIST)/ and ./$(BINARY)"
+	@echo "  deep-clean  clean build outputs + purge Go build & test caches"
 	@echo "  help        this message"
 	@echo "Use -B / --always-make to force run a target"
 
