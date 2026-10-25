@@ -27,6 +27,10 @@ go test ./...   # tests exist in internal/protocol, internal/room, cmd/catpult
 
 Module `catpult`. Tailcat is now a direct dependency (`github.com/tailscale/tailcat v0.6.0`).
 
+## Releasing
+
+See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a GitHub tag, GitHub Actions matrix packaging, and updating the Homebrew tap formula for bottling.
+
 ## Layout (current)
 
 - `cmd/catpult/main.go` — CLI entrypoint with `run()`, args parsing (`--expires`, `--target`), sender (files/stdin stream), receiver, usage.

@@ -41,11 +41,19 @@ That's it! The `.env` file is downloaded directly to their current folder with p
 
 ## 📦 Installation
 
+### Homebrew (macOS & Linux)
+
+The recommended installation method for macOS and Linux. Installing through Homebrew automatically avoids macOS Gatekeeper notarization warnings:
+
+```sh
+brew install quirkdom/tap/catpult
+```
+
 ### Pre-built binaries
 
 Pre-compiled binaries for Linux, macOS, and Windows (Intel/AMD and ARM architectures) are available in the [Releases](https://github.com/quirkdom/catpult/releases) tab.
 
-> **Tip for macOS users:** Because downloaded binaries are not notarized by Apple, Gatekeeper may flag the file on first download. You can clear the quarantine attribute with:
+> **Tip for manual macOS downloads:** If downloading pre-built binaries directly outside of Homebrew, Gatekeeper will flag the unnotarized binary on first launch. You can clear the quarantine attribute with:
 > ```sh
 > xattr -d com.apple.quarantine ./catpult
 > chmod +x ./catpult
@@ -61,14 +69,12 @@ git clone https://github.com/quirkdom/catpult.git
 cd catpult
 
 # 2. Build the binary
-go build -o catpult ./cmd/catpult
-# or using make:
-make build
+make # or `go build -o catpult ./cmd/catpult`
 ```
 
 To install directly to your `$GOPATH/bin`:
 ```sh
-go install ./cmd/catpult
+make install # or `go install ./cmd/catpult`
 ```
 
 ---

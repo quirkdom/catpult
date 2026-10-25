@@ -17,12 +17,13 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # catpult has no cgo dependency; keep cross builds pure Go and static.
 export CGO_ENABLED := 0
 
-# Tailcat build tags for space savings (matches tailcat's build-tags.txt).
-# Includes base tags (netgo, osusergo, omitidna, omitpemdecrypt) and omits
-# all tailscale.com features tailcat doesn't need.
-TAILCAT_TAGS ?= $(shell (cd ~/Developer/tailcat && go run ./internal/buildtags/printtags) 2>/dev/null || cat ~/Developer/tailcat/build-tags.txt 2>/dev/null)
+# Default base tags + tags from build-tags.txt (or Go module cache fallback)
+BASE_TAGS    := netgo,osusergo,omitidna,omitpemdecrypt
+TAILCAT_TAGS ?= $(shell cat build-tags.txt 2>/dev/null || \
+                  dir=$$($(GO) list -mod=readonly -m -f '{{.Dir}}' github.com/tailscale/tailcat 2>/dev/null) && \
+                  cat "$$dir/build-tags.txt" 2>/dev/null)
 
-BUILD_FLAGS := -trimpath -tags '$(TAILCAT_TAGS)'
+BUILD_FLAGS := -trimpath -tags '$(BASE_TAGS),$(TAILCAT_TAGS)'
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
 PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64
@@ -33,14 +34,27 @@ GO_SOURCES := $(shell find . -type f -name '*.go' -not -path "./vendor/*") go.mo
 
 all: build
 
+# If build-tags.txt does not exist, seed it from vendor/ (or Go module cache)
+build-tags.txt:
+	@if [ -f vendor/github.com/tailscale/tailcat/build-tags.txt ]; then \
+		echo ">> Seeding build-tags.txt from vendor/github.com/tailscale/tailcat/"; \
+		cp vendor/github.com/tailscale/tailcat/build-tags.txt build-tags.txt; \
+	else \
+		dir=$$($(GO) list -mod=readonly -m -f '{{.Dir}}' github.com/tailscale/tailcat 2>/dev/null); \
+		if [ -n "$$dir" ] && [ -f "$$dir/build-tags.txt" ]; then \
+			echo ">> Seeding build-tags.txt from Go module cache ($$dir)..."; \
+			cp "$$dir/build-tags.txt" build-tags.txt; \
+		fi; \
+	fi
+
 ## build: compile for this host into ./$(BINARY)
 build: $(BINARY)
 
-$(BINARY): $(GO_SOURCES)
+$(BINARY): $(GO_SOURCES) build-tags.txt
 	$(GO) build $(BUILD_FLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY) $(PKG)
 
 ## build-all: cross-compile every platform in PLATFORMS into $(DIST)/
-build-all:
+build-all: build-tags.txt
 	@mkdir -p $(DIST)
 	@set -e; for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; \
@@ -52,7 +66,7 @@ build-all:
 	done
 
 ## build-one: cross-compile a single platform, e.g. make build-one PLATFORM=linux/arm64
-build-one:
+build-one: build-tags.txt
 	@mkdir -p $(DIST)
 	@set -e; os=$${PLATFORM%/*}; arch=$${PLATFORM#*/}; \
 		out=$(DIST)/$(BINARY)-$$os-$$arch; \
