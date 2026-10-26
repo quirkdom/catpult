@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"slices"
@@ -37,6 +38,10 @@ type options struct {
 	expiresSet bool
 	target     string
 	targetSet  bool
+	derp       []string // validated self-hosted relay endpoints (host[:port])
+	derpSet    bool
+	derpmap    string // URL of a JSON DERP relay map
+	derpmapSet bool
 	operands   []string
 }
 
@@ -56,6 +61,9 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 	if len(opts.operands) == 1 && transport.IsKey(opts.operands[0]) {
 		if opts.expiresSet {
 			return fmt.Errorf("--expires is a sender option; receivers exit on room closure, ^C, or transfer completion")
+		}
+		if opts.derpSet || opts.derpmapSet {
+			return fmt.Errorf("--derp and --derpmap are sender options; relay details are embedded in the invite, so receivers need no relay configuration")
 		}
 		if stdinPiped {
 			return fmt.Errorf("receiver never consumes stdin: `something | catpult KEY` is invalid")
@@ -89,14 +97,21 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		expires = opts.expires
 	}
 
+	relay := transport.Relay{}
+	if opts.derpSet {
+		relay.Endpoints = opts.derp
+	} else if opts.derpmapSet {
+		relay.MapURL = opts.derpmap
+	}
+
 	switch {
 	case hasHyphen || stdinPiped:
-		return runSenderStream(expires, stdin, stderr)
+		return runSenderStream(expires, relay, stdin, stderr)
 	case len(opts.operands) == 0:
 		usage(stderr)
-		return fmt.Errorf("no files specified; usage: catpult [--expires D] FILE... | catpult KEY [--target DIR]")
+		return fmt.Errorf("no files specified; usage: catpult [--expires D] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
 	default:
-		return runSenderFiles(expires, opts.operands, stderr)
+		return runSenderFiles(expires, relay, opts.operands, stderr)
 	}
 }
 
@@ -144,6 +159,43 @@ func parseArgs(argv []string) (*options, error) {
 			opts.target = strings.TrimPrefix(a, "--target=")
 			opts.targetSet = true
 			i++
+		case a == "--derp":
+			if i+1 >= len(argv) {
+				return nil, fmt.Errorf("flag %q requires a value", a)
+			}
+			ends, err := parseDERPEndpoints(argv[i+1])
+			if err != nil {
+				return nil, err
+			}
+			opts.derp = ends
+			opts.derpSet = true
+			i += 2
+		case strings.HasPrefix(a, "--derp="):
+			ends, err := parseDERPEndpoints(strings.TrimPrefix(a, "--derp="))
+			if err != nil {
+				return nil, err
+			}
+			opts.derp = ends
+			opts.derpSet = true
+			i++
+		case a == "--derpmap":
+			if i+1 >= len(argv) {
+				return nil, fmt.Errorf("flag %q requires a value", a)
+			}
+			if err := validateDERPMapURL(argv[i+1]); err != nil {
+				return nil, err
+			}
+			opts.derpmap = argv[i+1]
+			opts.derpmapSet = true
+			i += 2
+		case strings.HasPrefix(a, "--derpmap="):
+			v := strings.TrimPrefix(a, "--derpmap=")
+			if err := validateDERPMapURL(v); err != nil {
+				return nil, err
+			}
+			opts.derpmap = v
+			opts.derpmapSet = true
+			i++
 		case strings.HasPrefix(a, "-") && a != "-":
 			return nil, fmt.Errorf("unknown flag %q", a)
 		default:
@@ -151,12 +203,41 @@ func parseArgs(argv []string) (*options, error) {
 			i++
 		}
 	}
+	if opts.derpSet && opts.derpmapSet {
+		return nil, fmt.Errorf("--derp and --derpmap are mutually exclusive; give relay endpoints or a DERP map URL, not both")
+	}
 	return opts, nil
+}
+
+// parseDERPEndpoints validates a comma-separated --derp value via
+// transport.ParseRelayEndpoints, wrapping errors in flag context.
+func parseDERPEndpoints(spec string) ([]string, error) {
+	ends, err := transport.ParseRelayEndpoints(spec)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --derp %q: %v", spec, err)
+	}
+	return ends, nil
+}
+
+// validateDERPMapURL rejects obviously malformed DERP map URLs early, so the
+// failure surfaces as a flag error rather than a network error deep inside
+// Tailcat's DERP map fetch. Like tailcat's --derpmap-url, it imposes no
+// https-only policy: plain http is accepted (Tailcat's own default is https,
+// and the map is trusted infrastructure config).
+func validateDERPMapURL(s string) error {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid --derpmap %q: must be an absolute URL to a JSON DERP map (e.g. https://example.net/derpmap.json)", s)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid --derpmap %q: unsupported scheme %q (want http or https)", s, u.Scheme)
+	}
+	return nil
 }
 
 // --- sender: files ---
 
-func runSenderFiles(expires time.Duration, files []string, stderr *os.File) error {
+func runSenderFiles(expires time.Duration, relay transport.Relay, files []string, stderr *os.File) error {
 	for _, f := range files {
 		fi, err := os.Stat(f)
 		if err != nil {
@@ -192,11 +273,11 @@ func runSenderFiles(expires time.Duration, files []string, stderr *os.File) erro
 		fmt.Fprintf(stderr, "sent %d file(s) to recipient %d.\n", len(files), n)
 	}
 
-	srv, addr, err := transport.NewServer(handler)
+	srv, addr, err := transport.NewServer(handler, relay)
 	if err != nil {
 		return err
 	}
-	printInvite(stderr, string(addr), expires)
+	printInvite(stderr, string(addr), expires, relayDescription(relay))
 
 	waitDone := waitForShutdown(expires)
 
@@ -217,7 +298,7 @@ func runSenderFiles(expires time.Duration, files []string, stderr *os.File) erro
 
 // --- sender: stream ---
 
-func runSenderStream(expires time.Duration, stdin, stderr *os.File) error {
+func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr *os.File) error {
 	bc := room.NewBroadcaster()
 	handler := func(conn net.Conn) {
 		n := bc.Count() + 1
@@ -225,11 +306,11 @@ func runSenderStream(expires time.Duration, stdin, stderr *os.File) error {
 			fmt.Fprintf(stderr, "recipient %d: %v\n", n, err)
 		}
 	}
-	srv, addr, err := transport.NewServer(handler)
+	srv, addr, err := transport.NewServer(handler, relay)
 	if err != nil {
 		return err
 	}
-	printInvite(stderr, string(addr), expires)
+	printInvite(stderr, string(addr), expires, relayDescription(relay))
 	fmt.Fprintf(stderr, "Reading stream from stdin (EOF does not close the room).\n")
 
 	done := make(chan struct{})
@@ -331,12 +412,29 @@ func waitForShutdown(expires time.Duration) string {
 	}
 }
 
-func printInvite(stderr *os.File, invite string, expires time.Duration) {
+// relayDescription renders a one-line description of the room's custom
+// relay for the invite block; empty means the default relay. (The two
+// mechanisms are mutually exclusive, enforced for parse on both sides.)
+func relayDescription(relay transport.Relay) string {
+	if len(relay.Endpoints) > 0 {
+		return strings.Join(relay.Endpoints, ", ") + " (self-hosted DERP)"
+	}
+	if relay.MapURL != "" {
+		return relay.MapURL + " (custom DERP map)"
+	}
+	return ""
+}
+
+func printInvite(stderr *os.File, invite string, expires time.Duration, relayDesc string) {
 	exp := "until ^C (no expiry)"
 	if expires > 0 {
 		exp = "in " + humanizeDuration(expires)
 	}
-	fmt.Fprintf(stderr, "Catpult room created.\n\nExpires: %s\n\nInvite:\n%s\n\nShare this invite with recipients out of band.\n\nWaiting for recipients...\n", exp, invite)
+	fmt.Fprintf(stderr, "Catpult room created.\n")
+	if relayDesc != "" {
+		fmt.Fprintf(stderr, "\nRelay: %s\n", relayDesc)
+	}
+	fmt.Fprintf(stderr, "\nExpires: %s\n\nInvite:\n%s\n\nShare this invite with recipients out of band.\n\nWaiting for recipients...\n", exp, invite)
 }
 
 func humanizeDuration(d time.Duration) string {
@@ -373,10 +471,10 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `catpult - share secrets securely over tailnet (no Catpult server)
 
 Sender (files):
-  catpult [--expires DURATION] FILE...
+  catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] FILE...
 
 Sender (stdin stream):
-  catpult [--expires DURATION] -
+  catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] -
   producer | catpult [--expires DURATION]
 
 Receiver:
@@ -385,6 +483,13 @@ Receiver:
 Flags:
   --expires D   room lifetime (Go duration, e.g. 10m, 1h); default 30m; 0 = until ^C
   --target DIR  receive directory (default: current directory)
+  --derp HOSTS  use self-hosted DERP relay endpoint(s) for senders:
+                comma-separated host[:port] list (or [v6host]:port), TLS,
+                default port 443; when set no DERP map is fetched
+  --derpmap URL fetch the DERP relay map from URL instead of the default
+                (alternative to --derp; sender option; the invite embeds
+                the chosen relay, so recipients need no relay config).
+                http and https are both accepted, as in tailcat
   -h, --help    show this help
   -v, --version print version
 

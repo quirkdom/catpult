@@ -5,7 +5,7 @@
 ### Sender: files
 
 ```bash
-catpult [--expires DURATION] FILE...
+catpult [--expires DURATION] [--derp URL] FILE...
 ```
 
 - Starts an ephemeral sending server.
@@ -41,6 +41,36 @@ producer | catpult [--expires DURATION]
 - Every recipient receives the same byte stream.
 - File arguments cannot be combined with `-`.
 - `producer | catpult FILE` is invalid.
+
+### Custom DERP relay
+
+The sender's two modes extend with custom relay options:
+
+```bash
+catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] FILE...
+catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] -
+```
+
+Two disjoint mechanisms, at most one per room:
+
+- `--derp H[,H...]` — self-hosted relay endpoint(s): comma-separated
+  `host[:port]` entries (or `[v6host]:port`), DERP over TLS on the given
+  port (default 443). When set, no DERP map is fetched at all; this
+  follows Tailcat's `genkey --region` comma-separated-hostname mechanism.
+- `--derpmap URL` — fetch the room's bootstrap relay from the JSON DERP
+  map at `URL` instead of the default map; otherwise as Tailcat's
+  `--derpmap-url`. Both `http` and `https` are accepted (Tailcat imposes
+  no https-only policy; the map is trusted infrastructure config).
+
+Both are sender options using Tailcat's supported mechanisms; Catpult
+implements no custom relay protocol. Combining them is an error.
+
+- The chosen relay's details are embedded in the invite, so receivers take
+  no relay flags. Using `--derp`/`--derpmap` with a KEY is an error.
+- Self-hosted relay endpoints must present a valid TLS certificate for
+  their hostname.
+- Direct and DERP-relayed paths are equally encrypted; see the
+  product spec (§16) for trust semantics.
 
 ### Receiver
 

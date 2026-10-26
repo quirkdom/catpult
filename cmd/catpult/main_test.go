@@ -5,6 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tailscale/tailcat"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
 )
 
 func devNull(t *testing.T) *os.File {
@@ -98,6 +102,108 @@ func TestUnknownFlagIsError(t *testing.T) {
 	if err := run([]string{"--frobnicate"}, devNull(t), stdout, stderr); err == nil {
 		t.Fatal("expected error for unknown flag")
 	}
+}
+
+const testDERPURL = "https://relay.example.net/derpmap.json"
+
+func TestBadDERPMapRejected(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	for _, bad := range []string{"", "not a url", "example.net/dm.json", "https://", "ftp://example.net/dm.json"} {
+		if err := run([]string{"--derpmap", bad, "f.txt"}, devNull(t), stdout, stderr); err == nil {
+			t.Fatalf("expected error for --derpmap %q", bad)
+		}
+	}
+}
+
+// TestDERPMapHTTPAllowed locks in tailcat parity: --derpmap imposes no
+// https-only policy, so plain http map URLs parse fine (tailcat's own
+// --derpmap-url accepts them; its default is https).
+func TestDERPMapHTTPAllowed(t *testing.T) {
+	for _, ok := range []string{"http://127.0.0.1:8080/derpmap.json", "https://relay.example.net/dm.json"} {
+		if _, err := parseArgs([]string{"--derpmap", ok}); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", ok, err)
+		}
+	}
+}
+
+func TestDERPFlagParses(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	if err := run([]string{"--derp", "not a url", "f.txt"}, devNull(t), stdout, stderr); err == nil {
+		t.Fatal("expected error for --derp URL")
+	}
+
+	opts, err := parseArgs([]string{"--derpmap", testDERPURL, "f.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.derpmapSet || opts.derpmap != testDERPURL {
+		t.Fatalf("space form: got derpmap %q derpmapSet %v", opts.derpmap, opts.derpmapSet)
+	}
+	opts, err = parseArgs([]string{"--derpmap=" + testDERPURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.derpmapSet || opts.derpmap != testDERPURL {
+		t.Fatalf("equals form: got derpmap %q derpmapSet %v", opts.derpmap, opts.derpmapSet)
+	}
+}
+
+func TestDERPEndpointsParse(t *testing.T) {
+	opts, err := parseArgs([]string{"--derp", "relay-a.example.net, relay-b:8443 , [::1]:443 , ::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := opts.derp
+	want := []string{"relay-a.example.net", "relay-b:8443", "[::1]:443", "::1"}
+	if !opts.derpSet || strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("endpoints = %v, want %v", got, want)
+	}
+}
+
+func TestBadDERPEndpointRejected(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	for _, bad := range []string{"", "relay-a,, relay-c", "https://relay.example.net:443/derp",
+		"relay.example.net:0", "relay.example.net:99999", "relay:port", "host[name]", "rel ay.example.net"} {
+		if err := run([]string{"--derp", bad, "f.txt"}, devNull(t), stdout, stderr); err == nil {
+			t.Fatalf("expected error for --derp %q", bad)
+		}
+	}
+}
+
+func TestDERPAndDERPMapExclusive(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	if err := run([]string{"--derp", "relay.example.net", "--derpmap", testDERPURL, "f.txt"}, devNull(t), stdout, stderr); err == nil {
+		t.Fatal("expected error for --derp together with --derpmap")
+	}
+}
+
+func TestDERPWithReceiverIsError(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	invite := syntheticInvite(t)
+	for _, args := range [][]string{
+		{"--derp", "relay.example.net", invite},
+		{"--derpmap", testDERPURL, invite},
+	} {
+		err := run(args, devNull(t), stdout, stderr)
+		if err == nil {
+			t.Fatalf("expected error for %v with receiver", args)
+		} else if !strings.Contains(err.Error(), "sender options") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
+// syntheticInvite returns a parseable tailcat address without touching the
+// network, for tests of sender/receiver dispatch.
+func syntheticInvite(t *testing.T) string {
+	t.Helper()
+	ci := tailcat.ConnInfo{
+		ServerPublic:      tailcat.NodePublic{NodePublic: key.NewNode().Public()},
+		ServerDiscoPublic: tailcat.DiscoPublic{DiscoPublic: key.NewDisco().Public()},
+		PresharedKey:      tailcat.NewPresharedKey(),
+		Region:            []*tailcfg.DERPRegion{{RegionID: 1}},
+	}
+	return string(ci.Addr())
 }
 
 func TestHumanizeDuration(t *testing.T) {
