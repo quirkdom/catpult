@@ -43,7 +43,7 @@ This document serves as both a **public feature tracker** and a **project manage
 | | Recipient connection tracking | 🟡 On the cards | Ephemeral host visibility into connected and active peers. |
 | | Transfer progress & status UI | 🟡 On the cards | Richer stderr progress indicators during large transfers. |
 | | Direct-only ("paranoid") mode | 🟡 On the cards | `--direct-only` flag to block transfers over DERP relays. |
-| | Custom DERP configuration | 🟡 On the cards | `--derp` flag for enterprise/private relay infrastructure. |
+| | Custom DERP configuration | 🟢 Available | Two disjoint mechanisms per suite demo: `--derp H[,H...]` names self-hosted relay endpoints directly (no map fetch, tailcat `--region` style), `--derpmap URL` fetches a custom JSON DERP map. The invite embeds the chosen relay, so receivers need no config. Verified end-to-end against a local DERP server in `cmd/catpult/derp_e2e_test.go`. |
 | **Reach (Phase 3)** | Static browser receiver | 🟡 On the cards | In-browser receiver via Tailcat WASM (`https://host/#<key>`). |
 | | Ephemeral replay buffer controls | 🟡 On the cards | Configurable buffer sizes for pastebin-style workflows. |
 | | Package manager distributions | 🟡 On the cards | Homebrew, Scoop, and signed release archives. |
@@ -92,8 +92,8 @@ The MVP is complete, robust, and designed around Unix simplicity and defensive c
    - Exchange lightweight `HELLO` / `WELCOME` handshakes over the existing Tailcat link.
 2. **Paranoid Mode (`--direct-only`):**
    - Guarantee that sensitive bytes only travel over direct peer-to-peer WireGuard connections, refusing to send payload data over DERP relay fallback nodes.
-3. **Custom DERP Infrastructure (`--derp`):**
-   - Allow enterprise users and private networks to point Catpult at their own self-hosted relay servers rather than public infrastructure.
+3. **Custom DERP Infrastructure (`--derp` / `--derpmap`) — Shipped:**
+   - Enterprise users and private networks can point Catpult at their own self-hosted relay endpoints (`--derp host[:port],...`, tailcat `--region` style) or a full custom DERP map (`--derpmap URL`) rather than public infrastructure.
 4. **Enhanced UX:**
    - Clean terminal progress bars and transfer statistics on `stderr`.
 

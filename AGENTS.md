@@ -34,9 +34,9 @@ See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a
 ## Layout (current)
 
 - `cmd/catpult/main.go` — CLI entrypoint with `run()`, args parsing (`--expires`, `--target`), sender (files/stdin stream), receiver, usage.
-- `cmd/catpult/main_test.go` — CLI tests exist.
+- `cmd/catpult/main_test.go` — CLI tests exist, plus live local-DERP e2e in `derp_e2e_test.go` (`TestCustomDERPMapE2E`, `TestCustomDERPEndpointsE2E`: spins up an in-process DERP+STUN server, runs real sender/receiver processes through `--derpmap` / `--derp`; skipped under `-short`).
 - `internal/protocol/` — magic-prefixed (`EGAD`), versioned, length-delimited framing (`protocol.go`, `protocol_test.go`). Defines `magic`, `Version`, `MsgType`, frame read/write, `ROOM_INFO`, `FILE_HEADER` encoding.
-- `internal/transport/` — transport abstraction (`transport.go`). Uses Tailcat Go library directly; defines `NewServer`, `Dial`, `IsKey`, timeouts.
+- `internal/transport/` — transport abstraction (`transport.go`). Uses Tailcat Go library directly; defines `NewServer` (+ `Relay` for the two custom-relay mechanisms), `Dial`, `IsKey`, timeouts. Set `CATPULT_DEBUG=1` to surface relay logs (`debugLogf`).
 - `internal/room/` — room lifecycle (`sender_file.go`, `sender_stream.go`, `receiver.go`, `safety.go`, `room_test.go`). Handles file serving, streaming broadcaster, receiving with path validation.
 - `docs/` — `Catpult CLI MVP Spec.md` (authoritative CLI contract) and `Catpult - Agent Implementation Specification.md` (product/protocol spec). Read both before touching CLI/transport/protocol/room.
 - `go.mod` / `go.sum` — `catpult`; `tailcat` direct; `go 1.27.1`.
@@ -57,4 +57,4 @@ See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a
 - Recipient safety: validate filenames, reject absolute paths and `../`, never write outside intended receive dir (`target`), never expose FS contents or command execution (`receiver.go`, `safety.go`).
 - Delivery is best-effort, no ACKs/receipts/queues. Report `sent` / `transfer completed`, never `delivered`.
 - Invite is a secret bearer capability, not an "encryption key".
-- MVP scope only: `catpult [--expires D] FILE...` / `catpult [--expires D] -` sender, `catpult KEY [--target DIR]` receiver. Out of scope: accounts, auth, vaults, history, receipts, browser/WASM, custom DERP, `--direct-only`, `--name`, recipient→sender transfer, REPL, multi-room, daemon/IPC, mixed file+stream. See spec §21.
+- MVP scope only: `catpult [--expires D] [--derp H[,H...]] [--derpmap URL] FILE...` / `catpult [--expires D] -` sender, `catpult KEY [--target DIR]` receiver. Out of scope: accounts, auth, vaults, history, receipts, browser/WASM, `--direct-only`, `--name`, recipient→sender transfer, REPL, multi-room, daemon/IPC, mixed file+stream. See spec §21.

@@ -91,6 +91,14 @@ catpult .env config.json cert.pem
 
 # Set a custom timer (default is 30 minutes; use 0 to keep it open until Ctrl-C)
 catpult --expires 10m .env
+
+# Use your own relay infrastructure (e.g. enterprise / private network)
+#
+#   --derp: name self-hosted relay endpoint(s) directly (comma-separated,
+#           HTTPS, default port 443)
+catpult --derp relay-a.example.net,relay-b.example.net:8443 .env
+#   --derpmap: or fetch a full DERP map from a URL
+catpult --derpmap https://relay.example.net/derpmap.json .env
 ```
 
 - **Late joiners welcome:** Anyone who enters the key while your terminal is running gets all the files.
@@ -148,6 +156,7 @@ Catpult follows the classic Unix philosophy:
 ## 🔒 How Catpult Keeps You Safe
 
 - **End-to-End Encryption:** Traffic travels over WireGuard tunnels created with [Tailcat](https://github.com/tailscale/tailcat). If two computers cannot connect directly due to strict firewalls, traffic is securely relayed through encrypted relay nodes (DERP)—even the relay node cannot read your data.
+- **Bring Your Own Relay:** Organizations that don't want to depend on public relay infrastructure can point a room at their own relay — either via `--derp` (self-hosted endpoint hostnames) or `--derpmap` (a full JSON DERP map), both sender options. The chosen relay's details are embedded in the invite, so recipients need no extra configuration — and the WireGuard encryption is identical either way.
 - **Secret Invites:** The invite key (`tc...`) is a temporary pass. Only people who have the key can connect.
 - **Strict Folder Guardrails:** Senders cannot sneak files into other folders on your computer. Catpult strictly blocks directory traversal tricks (`../`), absolute paths, and null bytes. Everything stays confined to your `--target` folder.
 - **Clean Incomplete Transfers:** If a transfer is interrupted midway, partial files are automatically removed so you never end up with corrupted files.
