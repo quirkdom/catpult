@@ -83,3 +83,22 @@ The tap repository includes a scheduled workflow (`.github/workflows/autobump.ym
 - It discovers new releases from GitHub using `brew bump`.
 - It automatically opens the bump Pull Request for you.
 - You only need to review the PR and run the `brew pr-pull` workflow to bottle and merge it.
+
+> [!NOTE]
+> Autobump only picks up **stable** releases. Tags containing pre-release keywords (`alpha`, `beta`, `rc`, `dev`, ...) are treated as unstable by `brew bump` and skipped — for those, use Option C below.
+
+---
+
+### Option C: Manual Bump for Pre-releases
+
+Pre-release tags are never picked up by autobump; bump them manually. `brew bump-formula-pr` does the update branch + PR for you, including computing the new SHA256:
+
+1. Open the bump PR:
+   ```sh
+   brew bump-formula-pr --no-fork quirkdom/tap/catpult --version=0.2-beta
+   ```
+   This updates `url`/`sha256`/`version` in `Formula/catpult.rb`, pushes an update branch to `quirkdom/homebrew-tap`, and opens a Pull Request.
+
+2. Continue as in Option A: let `tests.yml` compile the bottles on the PR, then run the **brew pr-pull** workflow with the PR number to bottle and merge.
+
+Once a stable tag (e.g. `v0.2`) is pushed, the nightly autobump picks it up on its own and opens the bump PR, jumping straight from the current pre-release to the new stable version.
