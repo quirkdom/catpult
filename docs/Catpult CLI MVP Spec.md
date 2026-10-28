@@ -22,6 +22,42 @@ Example:
 catpult --expires 10m foo.txt bar.txt
 ```
 
+### Sender: files (watch mode)
+
+```bash
+catpult --watch [--expires DURATION] FILE...
+```
+
+- `--watch` selects watch mode; files only — combining it with `-` or
+  piped stdin is an error, and using it with a KEY is an error (the
+  receiver needs no flag: the room announces watch semantics itself).
+- The file set is fixed: only the `FILE...` passed at room creation is
+  watched; files that appear later are ignored.
+- The default expiry stays **30m**; `--expires` overrides, `0` = until
+  `^C`.
+- Recipient connections are never closed while the room is alive: each
+  watched file is re-sent to every connected recipient whenever its
+  `mtime`+`size` changes on disk (polled about once a second; detection
+  latency ≤ poll interval). A `touch` with unchanged contents also
+  triggers a re-send.
+- A version still in flight to a recipient when its file changes is
+  dropped at a chunk boundary and replaced by a fresh version starting
+  at the first byte; recipients converge on the latest contents.
+- Consecutive rapid changes may coalesce into one re-send per poll.
+- A watched file that disappears is skipped (logged once) until it
+  reappears, e.g. via an editor's atomic save.
+- The room's end is delivered to each connected recipient exactly like
+  file mode: the sender closes the connection when its serving ends
+  (watch serving ends only at room close or recipient disconnect), the
+  receiver maps EOF to `room closed.`, then the sender prints
+  `room closed (reason).`
+
+Example:
+
+```bash
+catpult --watch .env
+```
+
 ### Sender: stdin
 
 ```bash
@@ -110,6 +146,13 @@ while creating:
 ```
 
 If stdout is piped/redirected, the same filename manifest is emitted.
+
+The same contract holds in watch mode: the receiver stays connected and
+prints the filename to stdout **each time a fully received version
+lands** (once per version), with a stderr note marking subsequent
+versions as updates; `room closed.` on stderr ends the session when the
+sender's room closes, so `catpult KEY | ...` style observers see every
+update.
 
 #### Receiving a stream
 
