@@ -37,8 +37,9 @@ const (
 type PayloadType byte
 
 const (
-	PayloadFile   PayloadType = 0x00
-	PayloadStream PayloadType = 0x01
+	PayloadFile      PayloadType = 0x00
+	PayloadStream    PayloadType = 0x01
+	PayloadFileWatch PayloadType = 0x02 // file mode + keep-open/resend semantics
 )
 
 func (p PayloadType) String() string {
@@ -47,6 +48,8 @@ func (p PayloadType) String() string {
 		return "file"
 	case PayloadStream:
 		return "stream"
+	case PayloadFileWatch:
+		return "file-watch"
 	default:
 		return "unknown"
 	}
@@ -163,7 +166,7 @@ func DecodeRoomInfo(p []byte) (PayloadType, error) {
 		return 0, fmt.Errorf("protocol: ROOM_INFO must be 1 byte, got %d", len(p))
 	}
 	switch PayloadType(p[0]) {
-	case PayloadFile, PayloadStream:
+	case PayloadFile, PayloadStream, PayloadFileWatch:
 		return PayloadType(p[0]), nil
 	default:
 		return 0, fmt.Errorf("protocol: unknown payload_type 0x%02x", p[0])

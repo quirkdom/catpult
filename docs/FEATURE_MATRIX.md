@@ -27,6 +27,7 @@ This document serves as both a **public feature tracker** and a **project manage
 | | Late-joiner file delivery | 🟢 Available | Any peer joining while the room is open receives all files. |
 | | File target directory (`--target`) | 🟢 Available | Receivers can route output to any directory (default: current dir). |
 | | Manifest on stdout | 🟢 Available | Prints saved filenames to stdout; pipes cleanly to other tools. |
+| | File watch mode (`--watch`) | 🟢 Available | Room stays open and re-sends each file on change (`catpult --watch FILE...`). |
 | **Stream Sharing** | Stdin streaming (`catpult -` / pipe) | 🟢 Available | Stream real-time data (`catpult -` or `cmd \| catpult`). |
 | | 1:N live broadcast | 🟢 Available | Broadcasts stream to multiple connected peers simultaneously. |
 | | Late-joiner stream playback | 🟢 Available | Replays in-memory buffer (up to 64 MiB) plus live tail. |

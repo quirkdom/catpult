@@ -40,7 +40,12 @@ func Receive(conn net.Conn, targetDir string, stdout io.Writer, warnf func(strin
 		if !isStdoutTTY {
 			warnf("note: sender is sharing files; stdout lists received filenames, not file contents\n")
 		}
-		return receiveFiles(conn, targetDir, stdout)
+		return receiveFiles(conn, targetDir, stdout, warnf, false)
+	case protocol.PayloadFileWatch:
+		if !isStdoutTTY {
+			warnf("note: sender is sharing files in watch mode; stdout lists received filenames, not file contents\n")
+		}
+		return receiveFiles(conn, targetDir, stdout, warnf, true)
 	case protocol.PayloadStream:
 		if isStdoutTTY {
 			warnf("note: sender is streaming raw bytes; writing them to the terminal\n")
@@ -51,100 +56,133 @@ func Receive(conn net.Conn, targetDir string, stdout io.Writer, warnf func(strin
 	}
 }
 
-func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer) error {
+// receiveFiles receives file payloads, in both finite (MVP) and watch
+// flavors. In watch mode the connection stays open and a FILE_HEADER seen
+// while a file is mid-transfer means "discard the partial and start over"
+// (implicit in-flight supersede); while idle between versions no read
+// deadline applies, but chunk reads carry the usual frame deadline, and
+// EOF maps to ErrRoomClosed.
+func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer, warnf func(string, ...any), watch bool) error {
 	if err := EnsureTargetDir(targetDir); err != nil {
 		return err
 	}
-	var received int
-	for {
-		if err := conn.SetReadDeadline(time.Now().Add(frameTimeout)); err != nil {
-			if received > 0 && isEOF(err) {
-				return nil // finite transfer completed; sender closed
-			}
+	if watch {
+		// Clear the handshake deadline: idle time between watched-file
+		// versions is normal, not an error condition.
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
 			return err
 		}
-		fr, err := protocol.ReadFrame(conn, protocol.MaxFrame)
-		if err != nil {
-			if received > 0 && isEOF(err) {
-				return nil // finite transfer completed; sender closed
-			}
-			return fmt.Errorf("receiving: %w", err)
-		}
-		switch fr.Type {
-		case protocol.MsgFileHeader:
-			name, size, err := protocol.DecodeFileHeader(fr.Payload)
-			if err != nil {
-				return err
-			}
-			if err := receiveOneFile(conn, targetDir, name, size); err != nil {
-				return err
-			}
-			fmt.Fprintln(stdout, name)
-			received++
-		case protocol.MsgStreamChunk, protocol.MsgStreamEnd,
-			protocol.MsgFileChunk, protocol.MsgFileEnd, protocol.MsgRoomInfo:
-			return fmt.Errorf("protocol: unexpected message 0x%02x in file mode", byte(fr.Type))
-		}
 	}
-}
-
-func receiveOneFile(conn net.Conn, targetDir, name string, size uint64) error {
 	root, err := os.OpenRoot(targetDir)
 	if err != nil {
 		return fmt.Errorf("opening target dir: %w", err)
 	}
 	defer root.Close()
-	dest, err := ValidateFilename(name, targetDir)
-	if err != nil {
-		return err
-	}
-	f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", dest, err)
-	}
-	written := uint64(0)
-	done := false
-	defer func() {
-		_ = f.Close()
-		if !done {
-			_ = os.Remove(dest) // no partial files on failure
+
+	var (
+		received int
+		curName  string
+		curDest  string
+		curSize  uint64
+		written  uint64
+		curFile  *os.File
+	)
+	// discard closes the in-progress file and removes its partial bytes.
+	// Used both for the implicit-supersede path and error cleanup.
+	discard := func() {
+		if curFile != nil {
+			_ = curFile.Close()
+			_ = os.Remove(curDest) // no partial files on failure/supersede
+			curFile = nil
 		}
-	}()
-	for written < size {
-		if err := conn.SetReadDeadline(time.Now().Add(frameTimeout)); err != nil {
-			return err
+	}
+	defer discard()
+
+	for {
+		// Read deadline policy: finite mode applies a per-frame deadline
+		// unconditionally. Watch mode clears it while idle between file
+		// versions (gaps are normal) and applies it while a file is
+		// mid-transfer, so a stalled sender still aborts at frameTimeout.
+		deadline := time.Now().Add(frameTimeout)
+		if watch && curFile == nil {
+			deadline = time.Time{}
 		}
-		fr, err := protocol.ReadFrame(conn, protocol.MaxFrame)
+		// A deadline-set failure usually means the connection is already
+		// dead; classify it (and the read) through the same EOF logic
+		// below rather than failing outright.
+		err := conn.SetReadDeadline(deadline)
+		var fr protocol.Frame
+		if err == nil {
+			fr, err = protocol.ReadFrame(conn, protocol.MaxFrame)
+		}
 		if err != nil {
-			return fmt.Errorf("receiving %s: %w", name, err)
+			// ErrUnexpectedEOF means a frame was torn mid-read: that is
+			// truncation, never a clean end, even between files.
+			if isEOF(err) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				if curFile != nil {
+					return fmt.Errorf("receiving %s: connection closed mid-transfer: %w", curName, io.ErrUnexpectedEOF)
+				}
+				if watch {
+					return ErrRoomClosed // room ended while staying open
+				}
+				if received > 0 {
+					return nil // finite transfer completed; sender closed
+				}
+			}
+			return fmt.Errorf("receiving: %w", err)
 		}
-		if fr.Type != protocol.MsgFileChunk {
-			return fmt.Errorf("protocol: expected file data for %s, got 0x%02x", name, byte(fr.Type))
+		switch fr.Type {
+		case protocol.MsgFileHeader:
+			// A header between files opens the next file; a header
+			// mid-file supersedes the partial (watch fuzz/supersede).
+			discard()
+			name, size, err := protocol.DecodeFileHeader(fr.Payload)
+			if err != nil {
+				return err
+			}
+			dest, err := ValidateFilename(name, targetDir)
+			if err != nil {
+				return err
+			}
+			f, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				return fmt.Errorf("creating %s: %w", dest, err)
+			}
+			curName, curDest, curSize, written, curFile = name, dest, size, 0, f
+		case protocol.MsgFileChunk:
+			if curFile == nil {
+				return fmt.Errorf("protocol: file data before any FILE_HEADER")
+			}
+			if uint64(len(fr.Payload)) > curSize-written {
+				return fmt.Errorf("protocol: %s overflow: %d bytes beyond declared size %d", curName, uint64(len(fr.Payload))-(curSize-written), curSize)
+			}
+			if _, err := curFile.Write(fr.Payload); err != nil {
+				return fmt.Errorf("writing %s: %w", curDest, err)
+			}
+			written += uint64(len(fr.Payload))
+		case protocol.MsgFileEnd:
+			if curFile == nil {
+				return fmt.Errorf("protocol: unexpected end marker without FILE_HEADER")
+			}
+			if written != curSize {
+				return fmt.Errorf("protocol: %s truncated: got %d of %d bytes", curName, written, curSize)
+			}
+			if err := curFile.Close(); err != nil {
+				return fmt.Errorf("closing %s: %w", curDest, err)
+			}
+			curFile = nil
+			if watch && received > 0 {
+				// stdout manifest already lists the name again; a stderr
+				// note marks this as an update, not the first version.
+				warnf("received updated %s\n", curName)
+			}
+			fmt.Fprintln(stdout, curName)
+			received++
+			curName, curDest, curSize, written = "", "", 0, 0
+		case protocol.MsgStreamChunk, protocol.MsgStreamEnd, protocol.MsgRoomInfo:
+			return fmt.Errorf("protocol: unexpected message 0x%02x in file mode", byte(fr.Type))
 		}
-		if uint64(len(fr.Payload)) > size-written {
-			return fmt.Errorf("protocol: %s overflow: %d bytes beyond declared size %d", name, uint64(len(fr.Payload))-(size-written), size)
-		}
-		if _, err := f.Write(fr.Payload); err != nil {
-			return fmt.Errorf("writing %s: %w", dest, err)
-		}
-		written += uint64(len(fr.Payload))
 	}
-	// Expect FILE_END marker.
-	if err := conn.SetReadDeadline(time.Now().Add(frameTimeout)); err != nil {
-		return err
-	}
-	fr, err := protocol.ReadFrame(conn, protocol.MaxFrame)
-	if err != nil {
-		return fmt.Errorf("receiving end of %s: %w", name, err)
-	}
-	if fr.Type != protocol.MsgFileEnd {
-		return fmt.Errorf("protocol: expected end of %s, got 0x%02x", name, byte(fr.Type))
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", dest, err)
-	}
-	done = true
-	return nil
 }
 
 func receiveStream(conn net.Conn, stdout io.Writer) error {

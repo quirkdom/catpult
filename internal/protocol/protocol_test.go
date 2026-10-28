@@ -13,6 +13,7 @@ func TestRoundTrip(t *testing.T) {
 	}{
 		{MsgRoomInfo, EncodeRoomInfo(PayloadFile)},
 		{MsgRoomInfo, EncodeRoomInfo(PayloadStream)},
+		{MsgRoomInfo, EncodeRoomInfo(PayloadFileWatch)},
 		{MsgFileChunk, []byte("hello")},
 		{MsgStreamChunk, bytes.Repeat([]byte("x"), 100)},
 		{MsgFileEnd, nil},
@@ -34,11 +35,14 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestRoomInfoValidation(t *testing.T) {
-	for _, pt := range []PayloadType{PayloadFile, PayloadStream} {
+	for _, pt := range []PayloadType{PayloadFile, PayloadStream, PayloadFileWatch} {
 		got, err := DecodeRoomInfo(EncodeRoomInfo(pt))
 		if err != nil || got != pt {
 			t.Fatalf("roominfo %v: got %v, %v", pt, got, err)
 		}
+	}
+	if PayloadFileWatch.String() != "file-watch" {
+		t.Fatalf("PayloadFileWatch.String() = %q", PayloadFileWatch.String())
 	}
 	if _, err := DecodeRoomInfo([]byte{0x42}); err == nil {
 		t.Fatal("expected error for unknown payload_type")

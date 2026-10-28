@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +39,7 @@ type options struct {
 	expiresSet bool
 	target     string
 	targetSet  bool
+	watch      bool     // sender: keep the room open and re-send files on change
 	derp       []string // validated self-hosted relay endpoints (host[:port])
 	derpSet    bool
 	derpmap    string // URL of a JSON DERP relay map
@@ -65,6 +67,9 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		if opts.derpSet || opts.derpmapSet {
 			return fmt.Errorf("--derp and --derpmap are sender options; relay details are embedded in the invite, so receivers need no relay configuration")
 		}
+		if opts.watch {
+			return fmt.Errorf("--watch is a sender option; the receiver keeps receiving until the room closes regardless")
+		}
 		if stdinPiped {
 			return fmt.Errorf("receiver never consumes stdin: `something | catpult KEY` is invalid")
 		}
@@ -91,6 +96,9 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 	if stdinPiped && len(opts.operands) > 0 {
 		return fmt.Errorf("file arguments and piped stdin are mutually exclusive: `producer | catpult FILE` is invalid")
 	}
+	if opts.watch && (hasHyphen || stdinPiped) {
+		return fmt.Errorf("--watch requires file arguments: watch mode re-sends named files on change, it cannot watch a stdin stream")
+	}
 
 	expires := defaultExpires
 	if opts.expiresSet {
@@ -111,7 +119,7 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		usage(stderr)
 		return fmt.Errorf("no files specified; usage: catpult [--expires D] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
 	default:
-		return runSenderFiles(expires, relay, opts.operands, stderr)
+		return runFileSender(expires, relay, opts.operands, stderr, opts.watch)
 	}
 }
 
@@ -158,6 +166,11 @@ func parseArgs(argv []string) (*options, error) {
 		case strings.HasPrefix(a, "--target="):
 			opts.target = strings.TrimPrefix(a, "--target=")
 			opts.targetSet = true
+			i++
+		case a == "--watch":
+			// Boolean flag; only the bare form is accepted. `--watch=<x>`
+			// falls through to the unknown-flag error below.
+			opts.watch = true
 			i++
 		case a == "--derp":
 			if i+1 >= len(argv) {
@@ -237,7 +250,13 @@ func validateDERPMapURL(s string) error {
 
 // --- sender: files ---
 
-func runSenderFiles(expires time.Duration, relay transport.Relay, files []string, stderr *os.File) error {
+// runFileSender hosts a file room: a finite one-shot transfer (watch=false)
+// or a watch room that re-sends watched files to every connected recipient
+// whenever they change on disk (watch=true). Shared lifecycle: handler
+// bookkeeping (recipient numbering, active-connection registry), invite
+// printing, and shutdown — active connections are closed before waiting
+// on handlers, so a stalled recipient cannot hang teardown.
+func runFileSender(expires time.Duration, relay transport.Relay, files []string, stderr *os.File, watch bool) error {
 	for _, f := range files {
 		fi, err := os.Stat(f)
 		if err != nil {
@@ -248,11 +267,42 @@ func runSenderFiles(expires time.Duration, relay transport.Relay, files []string
 		}
 	}
 
+	var watcher *room.FileWatcher
+	if watch {
+		var err error
+		watcher, err = room.NewFileWatcher(files, room.WatchPollInterval)
+		if err != nil {
+			return err
+		}
+	}
+
 	var mu sync.Mutex
 	conns := make(map[net.Conn]struct{})
 	var served atomic.Int64
+	// Handlers run for the life of their connection (the whole room in
+	// watch mode; until this recipient's transfer completes in file mode),
+	// so shutdown waits on them after closing the conns.
+	var wgHandlers sync.WaitGroup
+
+	serve := func(conn net.Conn) error {
+		if watch {
+			return room.ServeWatchConn(conn, watcher, files, func(ev room.WatchEvent) {
+				switch ev.Kind {
+				case room.WatchSending:
+					fmt.Fprintf(stderr, "Sending %s (%d bytes)...\n", ev.Name, ev.Size)
+				case room.WatchMissing:
+					fmt.Fprintf(stderr, "watched file %s is missing; skipping until it reappears\n", ev.Name)
+				}
+			})
+		}
+		return room.ServeFileConn(conn, files, func(name string, size int64) {
+			fmt.Fprintf(stderr, "Sending %s (%d bytes)...\n", name, size)
+		})
+	}
 
 	handler := func(conn net.Conn) {
+		wgHandlers.Add(1)
+		defer wgHandlers.Done()
 		mu.Lock()
 		conns[conn] = struct{}{}
 		mu.Unlock()
@@ -263,14 +313,15 @@ func runSenderFiles(expires time.Duration, relay transport.Relay, files []string
 		}()
 		n := served.Add(1)
 		fmt.Fprintf(stderr, "recipient %d connected.\n", n)
-		err := room.ServeFileConn(conn, files, func(name string, size int64) {
-			fmt.Fprintf(stderr, "Sending %s (%d bytes)...\n", name, size)
-		})
-		if err != nil {
+		if err := serve(conn); err != nil {
 			fmt.Fprintf(stderr, "recipient %d: %v\n", n, err)
 			return
 		}
-		fmt.Fprintf(stderr, "sent %d file(s) to recipient %d.\n", len(files), n)
+		// No completion line in watch mode: the connection stays open for
+		// the next version until the room closes.
+		if !watch {
+			fmt.Fprintf(stderr, "sent %d file(s) to recipient %d.\n", len(files), n)
+		}
 	}
 
 	srv, addr, err := transport.NewServer(handler, relay)
@@ -278,14 +329,45 @@ func runSenderFiles(expires time.Duration, relay transport.Relay, files []string
 		return err
 	}
 	printInvite(stderr, string(addr), expires, relayDescription(relay))
+	if watch {
+		recipientCount := func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(conns)
+		}
+		// One line per detected change, regardless of how many recipients
+		// are watching (each handler supersedes its own in-flight transfer).
+		watcher.SetChangeCallback(func(name string) {
+			fmt.Fprintf(stderr, "%s changed; resending to %d recipient(s).\n", name, recipientCount())
+		})
+		watcher.SetWarnCallback(func(format string, args ...any) {
+			fmt.Fprintf(stderr, format, args...)
+		})
+		watcher.Start()
+		base := make([]string, len(files))
+		for i, f := range files {
+			base[i] = filepath.Base(f)
+		}
+		fmt.Fprintf(stderr, "Watch mode: re-sending %s whenever it/they change on disk. Recipients stay connected until the room closes.\n",
+			strings.Join(base, ", "))
+	}
 
 	waitDone := waitForShutdown(expires)
 
+	// Shutdown order: stop the watcher first so handlers' closing() gates
+	// flip and no new resend pass starts; then close every active
+	// connection so in-flight writes fail immediately instead of stalling
+	// teardown; then wait for handlers (each closes its own conn as it
+	// exits); finally drain/close the transport.
+	if watcher != nil {
+		watcher.Close()
+	}
 	mu.Lock()
 	for c := range conns {
 		c.Close()
 	}
 	mu.Unlock()
+	wgHandlers.Wait()
 	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = srv.DrainTCP(drainCtx)
@@ -473,6 +555,13 @@ func usage(w *os.File) {
 Sender (files):
   catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] FILE...
 
+Sender (files, watch mode):
+  catpult --watch [--expires DURATION] FILE...
+  the room stays open and each FILE is re-sent to every connected
+  recipient whenever it changes on disk (mtime+size polling, ~1s);
+  a version in flight when the file changes is dropped and the new
+  version re-sends from the start
+
 Sender (stdin stream):
   catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] -
   producer | catpult [--expires DURATION]
@@ -486,6 +575,9 @@ Flags:
   --derp HOSTS  use self-hosted DERP relay endpoint(s) for senders:
                 comma-separated host[:port] list (or [v6host]:port), TLS,
                 default port 443; when set no DERP map is fetched
+  --watch       file sender: keep the room open and re-send each FILE on
+                change; files only (no "-" or stdin); default expiry stays
+                30m; the receiver must also support watch mode
   --derpmap URL fetch the DERP relay map from URL instead of the default
                 (alternative to --derp; sender option; the invite embeds
                 the chosen relay, so recipients need no relay config).

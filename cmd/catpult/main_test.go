@@ -206,6 +206,63 @@ func syntheticInvite(t *testing.T) string {
 	return string(ci.Addr())
 }
 
+func TestWatchFlagParses(t *testing.T) {
+	opts, err := parseArgs([]string{"--watch", "f.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.watch {
+		t.Fatal("--watch did not set options.watch")
+	}
+	// The equals form is deliberately not supported.
+	if _, err := parseArgs([]string{"--watch=true"}); err == nil {
+		t.Fatal("expected unknown-flag error for --watch=true")
+	}
+}
+
+func TestWatchWithReceiverIsError(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	invite := syntheticInvite(t)
+	err := run([]string{"--watch", invite}, devNull(t), stdout, stderr)
+	if err == nil {
+		t.Fatal("expected error for --watch with receiver KEY")
+	} else if !strings.Contains(err.Error(), "sender option") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWatchWithStdinIsError(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	for _, argv := range [][]string{
+		{"--watch", "-"},
+		{"--watch", "-", "a.txt"},
+	} {
+		if err := run(argv, devNull(t), stdout, stderr); err == nil {
+			t.Fatalf("expected error for %v (files only)", argv)
+		} else if !strings.Contains(err.Error(), "file arguments") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	// Piped stdin counts the same as `-`.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	if err := run([]string{"--watch", "a.txt"}, r, stdout, stderr); err == nil {
+		t.Fatal("expected error for --watch with piped stdin")
+	}
+}
+
+func TestWatchWithNoFilesIsError(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	err := run([]string{"--watch"}, devNull(t), stdout, stderr)
+	if err == nil {
+		t.Fatal("expected error for --watch with no operands")
+	}
+}
+
 func TestHumanizeDuration(t *testing.T) {
 	cases := map[string]string{
 		"5s": "5 seconds", "1m": "1 minute", "10m": "10 minutes",

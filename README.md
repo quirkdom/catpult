@@ -104,6 +104,19 @@ catpult --derpmap https://relay.example.net/derpmap.json .env
 - **Late joiners welcome:** Anyone who enters the key while your terminal is running gets all the files.
 - **Close anytime:** Hit `Ctrl+C` whenever you want to close the room immediately.
 
+### Watch Mode: Share a File That Keeps Updating
+
+Keep a room open and re-send a file to every connected recipient whenever it changes on disk (mtime + size polling, about once a second):
+
+```sh
+catpult --watch .env
+```
+
+- Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry — the default `30m` applies; `--expires` overrides, `0` = until `Ctrl+C`).
+- A version still transferring when the file changes is dropped and the new version starts over, so recipients always converge on the latest contents.
+- The receiver prints the filename each time a version lands later.
+- Watch mode is files-only: it cannot be combined with `-` / piped stdin.
+
 ### Receiving Files
 
 By default, files are saved into your current folder:
