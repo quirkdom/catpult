@@ -37,6 +37,7 @@ func main() {
 type options struct {
 	expires    time.Duration
 	expiresSet bool
+	noExpiry   bool
 	target     string
 	targetSet  bool
 	watch      bool     // sender: keep the room open and re-send files on change
@@ -63,6 +64,9 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 	if len(opts.operands) == 1 && transport.IsKey(opts.operands[0]) {
 		if opts.expiresSet {
 			return fmt.Errorf("--expires is a sender option; receivers exit on room closure, ^C, or transfer completion")
+		}
+		if opts.noExpiry {
+			return fmt.Errorf("--no-expiry is a sender option; receivers exit on room closure, ^C, or transfer completion")
 		}
 		if opts.derpSet || opts.derpmapSet {
 			return fmt.Errorf("--derp and --derpmap are sender options; relay details are embedded in the invite, so receivers need no relay configuration")
@@ -103,6 +107,8 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 	expires := defaultExpires
 	if opts.expiresSet {
 		expires = opts.expires
+	} else if opts.noExpiry {
+		expires = 0
 	}
 
 	relay := transport.Relay{}
@@ -117,7 +123,7 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		return runSenderStream(expires, relay, stdin, stderr)
 	case len(opts.operands) == 0:
 		usage(stderr)
-		return fmt.Errorf("no files specified; usage: catpult [--expires D] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
+		return fmt.Errorf("no files specified; usage: catpult [--expires D | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
 	default:
 		return runFileSender(expires, relay, opts.operands, stderr, opts.watch)
 	}
@@ -167,6 +173,12 @@ func parseArgs(argv []string) (*options, error) {
 			opts.target = strings.TrimPrefix(a, "--target=")
 			opts.targetSet = true
 			i++
+		case a == "--no-expiry":
+			// Boolean flag; only the bare form is accepted. `--no-expiry=<x>`
+			// falls through to the unknown-flag error below.
+			opts.noExpiry = true
+			opts.expires = 0
+			i++
 		case a == "--watch":
 			// Boolean flag; only the bare form is accepted. `--watch=<x>`
 			// falls through to the unknown-flag error below.
@@ -215,6 +227,9 @@ func parseArgs(argv []string) (*options, error) {
 			opts.operands = append(opts.operands, a)
 			i++
 		}
+	}
+	if opts.expiresSet && opts.noExpiry {
+		return nil, fmt.Errorf("--no-expiry and --expires are mutually exclusive")
 	}
 	if opts.derpSet && opts.derpmapSet {
 		return nil, fmt.Errorf("--derp and --derpmap are mutually exclusive; give relay endpoints or a DERP map URL, not both")
@@ -554,24 +569,25 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `catpult - share secrets securely over tailnet (no Catpult server)
 
 Sender (files):
-  catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] FILE...
+  catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
 
 Sender (files, watch mode):
-  catpult --watch [--expires DURATION] FILE...
+  catpult --watch [--expires DURATION | --no-expiry] FILE...
   the room stays open and each FILE is re-sent to every connected
   recipient whenever it changes on disk (mtime+size polling, ~1s);
   a version in flight when the file changes is dropped and the new
   version re-sends from the start
 
 Sender (stdin stream):
-  catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] -
-  producer | catpult [--expires DURATION]
+  catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
+  producer | catpult [--expires DURATION | --no-expiry]
 
 Receiver:
   catpult KEY [--target DIR]
 
 Flags:
   --expires D   room lifetime (Go duration, e.g. 10m, 1h); default 30m; 0 = until ^C
+  --no-expiry   disable room expiry (equivalent to --expires=0; until ^C)
   --target DIR  receive directory (default: current directory)
   --derp HOSTS  use self-hosted DERP relay endpoint(s) for senders:
                 comma-separated host[:port] list (or [v6host]:port), TLS,

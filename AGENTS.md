@@ -9,7 +9,9 @@ make build       # host binary -> ./catpult
 make build-all   # cross-compile PLATFORMS -> dist/ (linux, windows, darwin; amd64 + arm64)
 make package     # cross-compile and package into archives (.tar.gz/.zip) in dist/
 make checksums   # generate SHA256 checksums in dist/checksums.txt
-make check       # gofmt gate + vet + test + build-all
+make check       # gofmt gate + vet + short tests + host build
+make check-all   # gofmt gate + vet + all tests + cross-compile all PLATFORMS
+make test        # run all tests -> go test ./...
 make clean       # remove dist/ and ./catpult
 make deep-clean  # clean build outputs + purge Go build & test caches
 make help
@@ -33,7 +35,7 @@ See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a
 
 ## Layout (current)
 
-- `cmd/catpult/main.go` — CLI entrypoint with `run()`, args parsing (`--expires`, `--target`, `--watch`), sender (files / stdin stream / files watch), receiver, usage.
+- `cmd/catpult/main.go` — CLI entrypoint with `run()`, args parsing (`--expires`, `--no-expiry`, `--target`, `--watch`), sender (files / stdin stream / files watch), receiver, usage.
 - `cmd/catpult/main_test.go` — CLI tests exist, plus live local-DERP e2e in `derp_e2e_test.go` (`TestCustomDERPMapE2E`, `TestCustomDERPEndpointsE2E`: spins up an in-process DERP+STUN server, runs real sender/receiver processes through `--derpmap` / `--derp`; skipped under `-short`). Watch-mode e2e lives separately in `watch_e2e_test.go` (`TestWatchE2E`: two real processes over the default relay; skipped under `-short`).
 - `internal/protocol/` — magic-prefixed (`EGAD`), versioned, length-delimited framing (`protocol.go`, `protocol_test.go`). Defines `magic`, `Version`, `MsgType`, frame read/write, `ROOM_INFO` (`PayloadFile` 0x00, `PayloadStream` 0x01, `PayloadFileWatch` 0x02), `FILE_HEADER` encoding.
 - `internal/transport/` — transport abstraction (`transport.go`). Uses Tailcat Go library directly; defines `NewServer` (+ `Relay` for the two custom-relay mechanisms), `Dial`, `IsKey`, timeouts. Set `CATPULT_DEBUG=1` to surface relay logs (`debugLogf`).
@@ -57,4 +59,4 @@ See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a
 - Recipient safety: validate filenames, reject absolute paths and `../`, never write outside intended receive dir (`target`), never expose FS contents or command execution (`receiver.go`, `safety.go`).
 - Delivery is best-effort, no ACKs/receipts/queues. Report `sent` / `transfer completed`, never `delivered`.
 - Invite is a secret bearer capability, not an "encryption key".
-- MVP scope only: `catpult [--expires D] [--derp H[,H...]] [--derpmap URL] FILE...` / `catpult [--expires D] -` sender, `catpult KEY [--target DIR]` receiver. Out of scope: accounts, auth, vaults, history, receipts, browser/WASM, `--direct-only`, `--name`, recipient→sender transfer, REPL, multi-room, daemon/IPC, mixed file+stream. See spec §21.
+- MVP scope only: `catpult [--expires D | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...` / `catpult [--expires D | --no-expiry] -` sender, `catpult KEY [--target DIR]` receiver. Out of scope: accounts, auth, vaults, history, receipts, browser/WASM, `--direct-only`, `--name`, recipient→sender transfer, REPL, multi-room, daemon/IPC, mixed file+stream. See spec §21.

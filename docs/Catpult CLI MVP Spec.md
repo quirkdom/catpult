@@ -5,14 +5,14 @@
 ### Sender: files
 
 ```bash
-catpult [--expires DURATION] [--derp URL] FILE...
+catpult [--expires DURATION | --no-expiry] [--derp URL] FILE...
 ```
 
 - Starts an ephemeral sending server.
 - Prints the room invite/key.
 - Waits for recipients.
 - Every recipient that joins receives **all files**.
-- Continues accepting recipients until `--expires` or `^C`.
+- Continues accepting recipients until `--expires` or `^C` (with `--no-expiry`, only `^C`).
 - Received files are materialized by the recipient.
 - File arguments and stdin are mutually exclusive.
 
@@ -25,7 +25,7 @@ catpult --expires 10m foo.txt bar.txt
 ### Sender: files (watch mode)
 
 ```bash
-catpult --watch [--expires DURATION] FILE...
+catpult --watch [--expires DURATION | --no-expiry] FILE...
 ```
 
 - `--watch` selects watch mode; files only — combining it with `-` or
@@ -33,8 +33,8 @@ catpult --watch [--expires DURATION] FILE...
   receiver needs no flag: the room announces watch semantics itself).
 - The file set is fixed: only the `FILE...` passed at room creation is
   watched; files that appear later are ignored.
-- The default expiry stays **30m**; `--expires` overrides, `0` = until
-  `^C`.
+- The default expiry stays **30m**; `--expires` overrides, `0` or
+  `--no-expiry` = until `^C`.
 - Recipient connections are never closed while the room is alive: each
   watched file is re-sent to every connected recipient whenever its
   `mtime`+`size` changes on disk (polled about once a second; detection
@@ -83,8 +83,8 @@ producer | catpult [--expires DURATION]
 The sender's two modes extend with custom relay options:
 
 ```bash
-catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] FILE...
-catpult [--expires DURATION] [--derp H[,H...]] [--derpmap URL] -
+catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
+catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
 ```
 
 Two disjoint mechanisms, at most one per room:

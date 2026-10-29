@@ -278,3 +278,53 @@ func TestHumanizeDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestNoExpiryFlagParses(t *testing.T) {
+	opts, err := parseArgs([]string{"--no-expiry", "f.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.noExpiry {
+		t.Fatal("--no-expiry did not set options.noExpiry")
+	}
+	if opts.expires != 0 {
+		t.Fatalf("expected opts.expires to be 0, got %v", opts.expires)
+	}
+	// The equals form is deliberately not supported (boolean flag).
+	if _, err := parseArgs([]string{"--no-expiry=true"}); err == nil {
+		t.Fatal("expected unknown-flag error for --no-expiry=true")
+	}
+}
+
+func TestNoExpiryAndExpiresMutuallyExclusive(t *testing.T) {
+	cases := [][]string{
+		{"--no-expiry", "--expires", "10m", "f.txt"},
+		{"--expires", "10m", "--no-expiry", "f.txt"},
+		{"--no-expiry", "--expires=10m", "f.txt"},
+		{"--expires=10m", "--no-expiry", "f.txt"},
+		{"--no-expiry", "--expires=0", "f.txt"},
+		{"--expires=0", "--no-expiry", "f.txt"},
+		{"--no-expiry", "--expires", "0s", "f.txt"},
+		{"--expires", "0s", "--no-expiry", "f.txt"},
+	}
+	for _, argv := range cases {
+		stdout, stderr := devNullOut(t)
+		err := run(argv, devNull(t), stdout, stderr)
+		if err == nil {
+			t.Fatalf("expected error for %v", argv)
+		} else if !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("unexpected error for %v: %v", argv, err)
+		}
+	}
+}
+
+func TestNoExpiryWithReceiverIsError(t *testing.T) {
+	stdout, stderr := devNullOut(t)
+	invite := syntheticInvite(t)
+	err := run([]string{"--no-expiry", invite}, devNull(t), stdout, stderr)
+	if err == nil {
+		t.Fatal("expected error for --no-expiry with receiver KEY")
+	} else if !strings.Contains(err.Error(), "sender option") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

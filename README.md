@@ -89,8 +89,9 @@ You can share one file or a whole set of files at once:
 # Share multiple files
 catpult .env config.json cert.pem
 
-# Set a custom timer (default is 30 minutes; use 0 to keep it open until Ctrl-C)
+# Set a custom timer (default is 30 minutes; use 0 or --no-expiry to keep it open until Ctrl-C)
 catpult --expires 10m .env
+catpult --no-expiry .env
 
 # Use your own relay infrastructure (e.g. enterprise / private network)
 #
@@ -112,7 +113,7 @@ Keep a room open and re-send a file to every connected recipient whenever it cha
 catpult --watch .env
 ```
 
-- Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry — the default `30m` applies; `--expires` overrides, `0` = until `Ctrl+C`).
+- Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry — the default `30m` applies; `--expires` or `--no-expiry` overrides, `0` = until `Ctrl+C`).
 - A version still transferring when the file changes is dropped and the new version starts over, so recipients always converge on the latest contents.
 - The receiver prints the filename each time a version lands later.
 - Watch mode is files-only: it cannot be combined with `-` / piped stdin.
