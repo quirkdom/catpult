@@ -186,16 +186,15 @@ func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer, warnf func(
 }
 
 func receiveStream(conn net.Conn, stdout io.Writer) error {
+	// Clear the handshake deadline: a stream may be idle indefinitely
+	// (e.g. tail -f or bursty producer), so no idle timeout applies.
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return err
+	}
 	for {
-		if err := conn.SetReadDeadline(time.Now().Add(frameTimeout)); err != nil {
-			if isEOF(err) {
-				return nil
-			}
-			return err
-		}
 		fr, err := protocol.ReadFrame(conn, protocol.MaxFrame)
 		if err != nil {
-			if isEOF(err) {
+			if isEOF(err) && !errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil
 			}
 			return fmt.Errorf("receiving stream: %w", err)

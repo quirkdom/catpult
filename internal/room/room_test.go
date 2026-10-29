@@ -207,6 +207,31 @@ func TestStreamLateJoinerGetsHistory(t *testing.T) {
 	}
 }
 
+func TestStreamIdleDoesNotTimeout(t *testing.T) {
+	b := NewBroadcaster()
+	client, server := net.Pipe()
+	defer client.Close()
+	go func() { _ = b.Serve(server) }()
+
+	// Client starts with a very short deadline, which Receive sets for handshake.
+	// Once ROOM_INFO is decoded, receiveStream must clear the read deadline so
+	// an idle pause does not trigger a timeout error.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		b.Publish([]byte("hello after idle"))
+		time.Sleep(50 * time.Millisecond)
+		b.CloseAll()
+	}()
+
+	var stdout bytes.Buffer
+	if err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false); err != nil {
+		t.Fatalf("receive failed during idle stream: %v", err)
+	}
+	if stdout.String() != "hello after idle" {
+		t.Fatalf("got %q, want 'hello after idle'", stdout.String())
+	}
+}
+
 func TestMaliciousFilenameRejected(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := ValidateFilename("../../etc/passwd", dir); err == nil {
