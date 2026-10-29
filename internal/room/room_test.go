@@ -232,6 +232,65 @@ func TestStreamIdleDoesNotTimeout(t *testing.T) {
 	}
 }
 
+func TestStreamCloseInputSendsEndToLiveSubs(t *testing.T) {
+	b := NewBroadcaster()
+	c1, s1 := net.Pipe()
+	c2, s2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+	go func() { _ = b.Serve(s1) }()
+	go func() { _ = b.Serve(s2) }()
+
+	b.Publish([]byte("stream-data-"))
+
+	var out1, out2 bytes.Buffer
+	e1 := make(chan error, 1)
+	e2 := make(chan error, 1)
+	go func() { e1 <- Receive(c1, t.TempDir(), &out1, func(string, ...any) {}, false) }()
+	go func() { e2 <- Receive(c2, t.TempDir(), &out2, func(string, ...any) {}, false) }()
+
+	time.Sleep(50 * time.Millisecond)
+	b.Publish([]byte("part2"))
+	time.Sleep(50 * time.Millisecond)
+	b.CloseInput()
+
+	if err := <-e1; err != ErrRoomClosed {
+		t.Fatalf("sub1: expected ErrRoomClosed, got %v", err)
+	}
+	if err := <-e2; err != ErrRoomClosed {
+		t.Fatalf("sub2: expected ErrRoomClosed, got %v", err)
+	}
+	if out1.String() != "stream-data-part2" {
+		t.Fatalf("sub1 = %q", out1.String())
+	}
+	if out2.String() != "stream-data-part2" {
+		t.Fatalf("sub2 = %q", out2.String())
+	}
+}
+
+func TestStreamCloseInputLateJoinerGetsHistoryAndEnd(t *testing.T) {
+	b := NewBroadcaster()
+	b.Publish([]byte("completed "))
+	b.Publish([]byte("stream"))
+	b.CloseInput()
+
+	// Subsequent publish after CloseInput should be ignored
+	b.Publish([]byte("ignored"))
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go func() { _ = b.Serve(server) }()
+
+	var stdout bytes.Buffer
+	err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false)
+	if err != ErrRoomClosed {
+		t.Fatalf("expected ErrRoomClosed, got %v", err)
+	}
+	if stdout.String() != "completed stream" {
+		t.Fatalf("got %q, want 'completed stream'", stdout.String())
+	}
+}
+
 func TestMaliciousFilenameRejected(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := ValidateFilename("../../etc/passwd", dir); err == nil {

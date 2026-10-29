@@ -419,6 +419,7 @@ func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr
 				} else {
 					fmt.Fprintf(stderr, "stdin closed; room stays open for late joiners until expiry or ^C.\n")
 				}
+				bc.CloseInput()
 				return
 			}
 		}

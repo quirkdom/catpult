@@ -18,6 +18,7 @@ type Broadcaster struct {
 	subs  map[*subscriber]struct{}
 	hist  []byte
 	total uint64 // total bytes ever appended (for future offset use)
+	ended bool
 }
 
 type subscriber struct {
@@ -42,6 +43,10 @@ func (b *Broadcaster) Publish(chunk []byte) {
 	}
 	cp := append([]byte(nil), chunk...)
 	b.mu.Lock()
+	if b.ended {
+		b.mu.Unlock()
+		return
+	}
 	b.hist = append(b.hist, cp...)
 	if overflow := len(b.hist) - protocol.StreamBufferCap; overflow > 0 {
 		b.hist = append([]byte(nil), b.hist[overflow:]...)
@@ -62,6 +67,21 @@ func (b *Broadcaster) Publish(chunk []byte) {
 	b.mu.Unlock()
 }
 
+// CloseInput marks the stream input as finished (e.g. sender stdin reached EOF).
+// Queued chunks are flushed to all live recipients followed by MsgStreamEnd,
+// and late joiners will receive the buffered history followed immediately by MsgStreamEnd.
+func (b *Broadcaster) CloseInput() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.ended {
+		return
+	}
+	b.ended = true
+	for sub := range b.subs {
+		close(sub.ch)
+	}
+}
+
 // Serve handles one recipient: ROOM_INFO(stream), buffered history in
 // order, then the live tail until the room ends or the peer goes away.
 // The subscriber is registered before history is sent so no byte appended
@@ -71,7 +91,11 @@ func (b *Broadcaster) Serve(conn net.Conn) error {
 	sub := &subscriber{conn: conn, ch: make(chan []byte, 64), done: make(chan struct{})}
 	b.mu.Lock()
 	hist := append([]byte(nil), b.hist...)
-	b.subs[sub] = struct{}{}
+	if b.ended {
+		close(sub.ch)
+	} else {
+		b.subs[sub] = struct{}{}
+	}
 	b.mu.Unlock()
 
 	defer func() {
@@ -97,12 +121,16 @@ func (b *Broadcaster) Serve(conn net.Conn) error {
 		}
 		off = end
 	}
+
 	// Live tail: ordered, one writer per conn.
+	// If the stream has already ended, sub.ch is closed, so this loop
+	// immediately sends MsgStreamEnd and exits cleanly.
 	for {
 		select {
 		case chunk, ok := <-sub.ch:
 			if !ok {
-				return nil
+				_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+				return protocol.WriteFrame(conn, protocol.MsgStreamEnd, nil)
 			}
 			if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 				return err
