@@ -30,7 +30,7 @@ PLATFORMS := darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 win
 
 GO_SOURCES := $(shell find . -type f -name '*.go' -not -path "./vendor/*") go.mod go.sum
 
-.PHONY: all build-all build-one install test vet fmt check package checksums clean deep-clean help print-env
+.PHONY: all build-all build-one install test vet fmt check check-all package checksums clean deep-clean help print-env
 
 all: build
 
@@ -91,8 +91,19 @@ vet:
 fmt:
 	$(GO) fmt ./...
 
-## check: formatting gate, vet, tests, and the full cross-compile matrix
+## check: gofmt gate, vet, short tests, and host build
 check:
+	@files=$$(find . -type f -name '*.go' -not -path "./vendor/*"); \
+	if [ -n "$$files" ]; then \
+		out=$$(gofmt -l $$files); \
+		if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi; \
+	fi
+	$(GO) vet ./...
+	$(GO) test -short ./...
+	@$(MAKE) build
+
+## check-all: gofmt gate, vet, all tests, and the full cross-compile matrix
+check-all:
 	@files=$$(find . -type f -name '*.go' -not -path "./vendor/*"); \
 	if [ -n "$$files" ]; then \
 		out=$$(gofmt -l $$files); \
@@ -145,7 +156,8 @@ help:
 	@echo "  test        go test ./..."
 	@echo "  vet         go vet ./..."
 	@echo "  fmt         go fmt ./..."
-	@echo "  check       gofmt gate + vet + test + build-all"
+	@echo "  check       gofmt gate + vet + short tests + host build"
+	@echo "  check-all   gofmt gate + vet + all tests + cross-compile all PLATFORMS"
 	@echo "  package     package binaries into archives (.tar.gz / .zip) in $(DIST)/"
 	@echo "  checksums   generate sha256 checksums in $(DIST)/checksums.txt"
 	@echo "  clean       remove $(DIST)/ and ./$(BINARY)"
