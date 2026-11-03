@@ -117,15 +117,12 @@ func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer, warnf, info
 		// unconditionally. Watch mode clears it while idle between file
 		// versions (gaps are normal) and applies it while a file is
 		// mid-transfer, so a stalled sender still aborts at frameTimeout.
-		// Immediately after the initial burst of files lands in watch mode,
-		// a short deadline detects that the sender has gone idle so we can
-		// announce completion of the initial receive.
 		deadline := time.Now().Add(frameTimeout)
 		if watch && curFile == nil {
-			if !initialAnnounced && len(seenFiles) > 0 {
-				deadline = time.Now().Add(50 * time.Millisecond)
-			} else {
+			if initialAnnounced {
 				deadline = time.Time{}
+			} else {
+				deadline = time.Now().Add(frameTimeout)
 			}
 		}
 		// A deadline-set failure usually means the connection is already
@@ -137,15 +134,6 @@ func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer, warnf, info
 			fr, err = protocol.ReadFrame(conn, protocol.MaxFrame)
 		}
 		if err != nil {
-			if watch && curFile == nil && !initialAnnounced && len(seenFiles) > 0 {
-				var netErr net.Error
-				if errors.As(err, &netErr) && netErr.Timeout() {
-					infof("received %d file(s). waiting for updates...\n", len(seenFiles))
-					initialAnnounced = true
-					_ = conn.SetReadDeadline(time.Time{})
-					continue
-				}
-			}
 			// ErrUnexpectedEOF means a frame was torn mid-read: that is
 			// truncation, never a clean end, even between files.
 			if isEOF(err) && !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -213,6 +201,15 @@ func receiveFiles(conn net.Conn, targetDir string, stdout io.Writer, warnf, info
 			}
 			received++
 			curName, curDest, curSize, written = "", "", 0, 0
+		case protocol.MsgWatchInitialEnd:
+			if !watch || curFile != nil || initialAnnounced {
+				return 0, fmt.Errorf("protocol: unexpected initial watch batch end")
+			}
+			infof("received %d file(s). waiting for updates...\n", len(seenFiles))
+			initialAnnounced = true
+			if err := conn.SetReadDeadline(time.Time{}); err != nil {
+				return 0, err
+			}
 		case protocol.MsgStreamChunk, protocol.MsgStreamEnd, protocol.MsgRoomInfo:
 			return 0, fmt.Errorf("protocol: unexpected message 0x%02x in file mode", byte(fr.Type))
 		}

@@ -3,6 +3,7 @@ package room
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -490,6 +491,7 @@ func TestWatchSupersedeMidFile(t *testing.T) {
 		_ = protocol.WriteFrame(server, protocol.MsgFileHeader, h2)
 		_ = protocol.WriteFrame(server, protocol.MsgFileChunk, []byte("hello"))
 		_ = protocol.WriteFrame(server, protocol.MsgFileEnd, nil)
+		_ = protocol.WriteFrame(server, protocol.MsgWatchInitialEnd, nil)
 		// A full version of a second file confirms the connection stays open.
 		h3, _ := protocol.EncodeFileHeader("g.txt", 2)
 		_ = protocol.WriteFrame(server, protocol.MsgFileHeader, h3)
@@ -564,7 +566,7 @@ func TestServeWatchConnDisconnectsPromptly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if f.Type == protocol.MsgFileEnd {
+		if f.Type == protocol.MsgWatchInitialEnd {
 			break
 		}
 	}
@@ -625,4 +627,55 @@ func TestWatchReceiverInitialReceiveWaitingLog(t *testing.T) {
 
 	w.Close()
 	_ = <-recvErr
+}
+
+func TestWatchInitialBatchLogWaitsForMarker(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "target")
+	var stderr bytes.Buffer
+	recvErr := make(chan error, 1)
+	go func() {
+		_, err := Receive(client, target, io.Discard, nil, func(format string, args ...any) {
+			fmt.Fprintf(&stderr, format, args...)
+		}, false)
+		recvErr <- err
+	}()
+
+	if err := protocol.WriteFrame(server, protocol.MsgRoomInfo, protocol.EncodeRoomInfo(protocol.PayloadFileWatch)); err != nil {
+		t.Fatal(err)
+	}
+	header, _ := protocol.EncodeFileHeader("slow.txt", 1)
+	for _, frame := range []struct {
+		typ     protocol.MsgType
+		payload []byte
+	}{
+		{protocol.MsgFileHeader, header},
+		{protocol.MsgFileChunk, []byte("x")},
+		{protocol.MsgFileEnd, nil},
+	} {
+		if err := protocol.WriteFrame(server, frame.typ, frame.payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if got := stderr.String(); strings.Contains(got, "waiting for updates") {
+		t.Fatalf("receiver announced initial completion before marker: %q", got)
+	}
+	if err := protocol.WriteFrame(server, protocol.MsgWatchInitialEnd, nil); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(stderr.String(), "waiting for updates") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(stderr.String(), "received 1 file(s). waiting for updates...") {
+		t.Fatalf("receiver did not announce after marker: %q", stderr.String())
+	}
+	_ = server.Close()
+	if err := <-recvErr; err != ErrRoomClosed {
+		t.Fatalf("receive: got %v, want ErrRoomClosed", err)
+	}
 }

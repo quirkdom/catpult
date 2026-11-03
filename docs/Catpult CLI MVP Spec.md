@@ -44,6 +44,9 @@ catpult --watch [--expires DURATION | --no-expiry] FILE...
   dropped at a chunk boundary and replaced by a fresh version starting
   at the first byte; recipients converge on the latest contents.
 - Consecutive rapid changes may coalesce into one re-send per poll.
+- The sender marks the end of the initial file pass in the protocol, so
+  the receiver reports “waiting for updates” only after that pass is
+  explicitly complete (never based on an idle timeout).
 - A watched file that disappears is skipped (logged once) until it
   reappears, e.g. via an editor's atomic save.
 - The room's end is delivered to each connected recipient exactly like

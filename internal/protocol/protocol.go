@@ -31,6 +31,8 @@ const (
 	MsgFileEnd     MsgType = 0x04
 	MsgStreamChunk MsgType = 0x05
 	MsgStreamEnd   MsgType = 0x06
+	// MsgWatchInitialEnd marks completion of the sender's initial watch pass.
+	MsgWatchInitialEnd MsgType = 0x07
 )
 
 // Payload types announced in ROOM_INFO.
@@ -121,7 +123,7 @@ func ReadFrame(r io.Reader, maxPayload int) (Frame, error) {
 	}
 	typ := MsgType(hdr[len(magic)+1])
 	switch typ {
-	case MsgRoomInfo, MsgFileHeader, MsgFileChunk, MsgFileEnd, MsgStreamChunk, MsgStreamEnd:
+	case MsgRoomInfo, MsgFileHeader, MsgFileChunk, MsgFileEnd, MsgStreamChunk, MsgStreamEnd, MsgWatchInitialEnd:
 	default:
 		return Frame{}, fmt.Errorf("protocol: unknown message type 0x%02x", byte(typ))
 	}

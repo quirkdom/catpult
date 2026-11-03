@@ -342,17 +342,27 @@ func ServeWatchConn(conn net.Conn, w *FileWatcher, files []string, onEvent func(
 		}
 		return err
 	}
+	if err := protocol.WriteFrame(conn, protocol.MsgWatchInitialEnd, nil); err != nil {
+		return err
+	}
 
 	connClosed := make(chan struct{})
 	go func() {
+		defer close(connClosed)
 		buf := make([]byte, 1)
 		for {
 			_, err := conn.Read(buf)
 			if err != nil {
-				close(connClosed)
 				return
 			}
 		}
+	}()
+	// Closing the connection unblocks the idle read. Wait for that read loop
+	// to exit before returning, so shutdown never leaves a handler goroutine
+	// behind.
+	defer func() {
+		_ = conn.Close()
+		<-connClosed
 	}()
 
 	for {
