@@ -55,7 +55,7 @@ func TestFileRoundTripOverPipe(t *testing.T) {
 
 	var stdout bytes.Buffer
 	warns := 0
-	if err := Receive(client, target, &stdout, func(string, ...any) { warns++ }, true); err != nil {
+	if _, err := Receive(client, target, &stdout, func(string, ...any) { warns++ }, nil, true); err != nil {
 		t.Fatalf("receive: %v", err)
 	}
 	if err := <-serveErr; err != nil {
@@ -95,7 +95,7 @@ func TestStreamRoundTripOverPipe(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	if err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false); err != nil {
+	if _, err := Receive(client, t.TempDir(), &stdout, nil, nil, false); err != nil {
 		t.Fatalf("receive: %v", err)
 	}
 	if stdout.String() != "hello stream" {
@@ -117,7 +117,7 @@ func TestStreamShutdownSendsEnd(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false)
+	_, err := Receive(client, t.TempDir(), &stdout, nil, nil, false)
 	if err != ErrRoomClosed {
 		t.Fatalf("expected ErrRoomClosed, got %v", err)
 	}
@@ -140,8 +140,8 @@ func TestStreamShutdownSendsEndWithMultipleSubs(t *testing.T) {
 	var out1, out2 bytes.Buffer
 	e1 := make(chan error, 1)
 	e2 := make(chan error, 1)
-	go func() { e1 <- Receive(c1, t.TempDir(), &out1, func(string, ...any) {}, false) }()
-	go func() { e2 <- Receive(c2, t.TempDir(), &out2, func(string, ...any) {}, false) }()
+	go func() { _, err := Receive(c1, t.TempDir(), &out1, nil, nil, false); e1 <- err }()
+	go func() { _, err := Receive(c2, t.TempDir(), &out2, nil, nil, false); e2 <- err }()
 
 	time.Sleep(50 * time.Millisecond)
 	b.Shutdown()
@@ -173,7 +173,7 @@ func TestStreamCloseAllDoesNotSendEnd(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false)
+	_, err := Receive(client, t.TempDir(), &stdout, nil, nil, false)
 	// CloseAll force-closes: receiver sees EOF (not MsgStreamEnd).
 	// Either nil (EOF on pipe) or an error is acceptable — the key is
 	// it does NOT return ErrRoomClosed (no STREAM_END was sent).
@@ -199,7 +199,7 @@ func TestStreamLateJoinerGetsHistory(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	if err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false); err != nil {
+	if _, err := Receive(client, t.TempDir(), &stdout, nil, nil, false); err != nil {
 		t.Fatalf("receive: %v", err)
 	}
 	if stdout.String() != "early byteslate" {
@@ -224,7 +224,7 @@ func TestStreamIdleDoesNotTimeout(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	if err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false); err != nil {
+	if _, err := Receive(client, t.TempDir(), &stdout, nil, nil, false); err != nil {
 		t.Fatalf("receive failed during idle stream: %v", err)
 	}
 	if stdout.String() != "hello after idle" {
@@ -246,8 +246,8 @@ func TestStreamCloseInputSendsEndToLiveSubs(t *testing.T) {
 	var out1, out2 bytes.Buffer
 	e1 := make(chan error, 1)
 	e2 := make(chan error, 1)
-	go func() { e1 <- Receive(c1, t.TempDir(), &out1, func(string, ...any) {}, false) }()
-	go func() { e2 <- Receive(c2, t.TempDir(), &out2, func(string, ...any) {}, false) }()
+	go func() { _, err := Receive(c1, t.TempDir(), &out1, nil, nil, false); e1 <- err }()
+	go func() { _, err := Receive(c2, t.TempDir(), &out2, nil, nil, false); e2 <- err }()
 
 	time.Sleep(50 * time.Millisecond)
 	b.Publish([]byte("part2"))
@@ -282,7 +282,7 @@ func TestStreamCloseInputLateJoinerGetsHistoryAndEnd(t *testing.T) {
 	go func() { _ = b.Serve(server) }()
 
 	var stdout bytes.Buffer
-	err := Receive(client, t.TempDir(), &stdout, func(string, ...any) {}, false)
+	_, err := Receive(client, t.TempDir(), &stdout, nil, nil, false)
 	if err != ErrRoomClosed {
 		t.Fatalf("expected ErrRoomClosed, got %v", err)
 	}
@@ -433,9 +433,10 @@ func TestWatchRoundTripOverPipe(t *testing.T) {
 	recvErr := make(chan error, 1)
 	var stdout, stderr bytes.Buffer
 	go func() {
-		recvErr <- Receive(client, target, &stdout, func(format string, args ...any) {
+		_, err := Receive(client, target, &stdout, nil, func(format string, args ...any) {
 			fmt.Fprintf(&stderr, format, args...)
 		}, false)
+		recvErr <- err
 	}()
 
 	gotFile := filepath.Join(target, "watched.env")
@@ -459,8 +460,8 @@ func TestWatchRoundTripOverPipe(t *testing.T) {
 		t.Fatalf("serve: %v", err)
 	}
 
-	// Manifest lists the filename once per delivered version.
-	if got, want := stdout.String(), "watched.env\nwatched.env\n"; got != want {
+	// In watch mode, the manifest prints the filename once (not per update).
+	if got, want := stdout.String(), "watched.env\n"; got != want {
 		t.Fatalf("stdout manifest = %q, want %q", got, want)
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("received updated watched.env")) {
@@ -497,7 +498,7 @@ func TestWatchSupersedeMidFile(t *testing.T) {
 	}()
 
 	var stdout bytes.Buffer
-	err := Receive(client, target, &stdout, func(string, ...any) {}, true)
+	_, err := Receive(client, target, &stdout, nil, nil, true)
 	if err != ErrRoomClosed {
 		t.Fatalf("receive: got %v, want ErrRoomClosed", err)
 	}
@@ -578,3 +579,50 @@ func TestServeWatchConnDisconnectsPromptly(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("ServeWatchConn failed to detect client disconnect promptly")
+	}
+}
+
+func TestWatchReceiverInitialReceiveWaitingLog(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "init.txt")
+	if err := os.WriteFile(src, []byte("hello initial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewFileWatcher([]string{src}, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start()
+	defer w.Close()
+
+	client, server := net.Pipe()
+	defer client.Close()
+	go func() { _ = ServeWatchConn(server, w, []string{src}, nil) }()
+
+	target := filepath.Join(dir, "target")
+	var stdout, stderr bytes.Buffer
+	recvErr := make(chan error, 1)
+	go func() {
+		_, err := Receive(client, target, &stdout, nil, func(format string, args ...any) {
+			fmt.Fprintf(&stderr, format, args...)
+		}, false)
+		recvErr <- err
+	}()
+
+	// Wait for target file to be written
+	waitForContent(t, filepath.Join(target, "init.txt"), "hello initial", 5*time.Second)
+
+	// Within 500ms, the receiver should announce completion of initial receive
+	time.Sleep(150 * time.Millisecond)
+
+	stderrStr := stderr.String()
+	if !strings.Contains(stderrStr, "received 1 file(s). waiting for updates...") {
+		t.Fatalf("expected 'waiting for updates...' note, got: %q", stderrStr)
+	}
+	if strings.Contains(stderrStr, "received updated") {
+		t.Fatalf("initial receive should not contain 'received updated', got: %q", stderrStr)
+	}
+
+	w.Close()
+	_ = <-recvErr
+}
