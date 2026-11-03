@@ -3,6 +3,7 @@ package room
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -55,8 +56,10 @@ type FileWatcher struct {
 	versions map[string]*atomic.Uint64
 	missing  map[string]bool // disappearance already announced
 	subs     map[*Subscription]struct{}
+	stopOnce sync.Once
 	stop     chan struct{}
 	done     chan struct{}
+	started  atomic.Bool
 }
 
 // NewFileWatcher builds a watcher for paths, capturing their initial
@@ -122,6 +125,9 @@ func (w *FileWatcher) warn(format string, args ...any) {
 
 // Start launches the poll goroutine. Stop it with Close.
 func (w *FileWatcher) Start() {
+	if !w.started.CompareAndSwap(false, true) {
+		return
+	}
 	go func() {
 		defer close(w.done)
 		ticker := time.NewTicker(w.interval)
@@ -212,8 +218,20 @@ func (w *FileWatcher) Subscribe() *Subscription {
 // Close stops polling and releases every subscription: their Done()
 // channels close as done closes, unblocking all watch handlers.
 func (w *FileWatcher) Close() {
-	close(w.stop)
-	<-w.done
+	w.stopOnce.Do(func() {
+		close(w.stop)
+	})
+	if w.started.Load() {
+		<-w.done
+	} else {
+		w.mu.Lock()
+		select {
+		case <-w.done:
+		default:
+			close(w.done)
+		}
+		w.mu.Unlock()
+	}
 	w.mu.Lock()
 	w.subs = nil
 	w.mu.Unlock()
@@ -324,10 +342,25 @@ func ServeWatchConn(conn net.Conn, w *FileWatcher, files []string, onEvent func(
 		}
 		return err
 	}
+
+	connClosed := make(chan struct{})
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			_, err := conn.Read(buf)
+			if err != nil {
+				close(connClosed)
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-sub.Done():
 			return nil
+		case <-connClosed:
+			return io.EOF
 		case <-sub.Changes():
 			if err := sendAll(); err != nil {
 				if errors.Is(err, errWatcherClosed) {

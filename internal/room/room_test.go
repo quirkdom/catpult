@@ -531,3 +531,50 @@ func TestWatchSupersedeMidFile(t *testing.T) {
 		t.Fatalf("target dir = %v, want exactly f.txt g.txt", names)
 	}
 }
+
+func TestServeWatchConnDisconnectsPromptly(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(src, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := NewFileWatcher([]string{src}, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start()
+	defer w.Close()
+
+	client, server := net.Pipe()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- ServeWatchConn(server, w, []string{src}, nil) }()
+
+	// Client reads ROOM_INFO
+	fr, err := protocol.ReadFrame(client, protocol.MaxHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fr.Type != protocol.MsgRoomInfo {
+		t.Fatalf("expected ROOM_INFO, got %v", fr.Type)
+	}
+	// Drain the initial file
+	for {
+		f, err := protocol.ReadFrame(client, protocol.MaxFrame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Type == protocol.MsgFileEnd {
+			break
+		}
+	}
+
+	// Now recipient disconnects
+	client.Close()
+
+	select {
+	case err := <-serveErr:
+		if err == nil {
+			t.Fatal("expected disconnect error, got nil")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("ServeWatchConn failed to detect client disconnect promptly")
