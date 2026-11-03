@@ -41,11 +41,23 @@ type options struct {
 	target     string
 	targetSet  bool
 	watch      bool     // sender: keep the room open and re-send files on change
+	quiet      bool     // silence non-fatal status on stderr
 	derp       []string // validated self-hosted relay endpoints (host[:port])
 	derpSet    bool
 	derpmap    string // URL of a JSON DERP relay map
 	derpmapSet bool
 	operands   []string
+}
+
+type runner struct {
+	stdin       *os.File
+	stdout      *os.File
+	stderr      *os.File
+	logger      *Logger
+	isStdoutTTY bool
+	opts        *options
+	relay       transport.Relay
+	expires     time.Duration
 }
 
 func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
@@ -59,6 +71,17 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 
 	stdinPiped := !isCharDevice(stdin)
 	isStdoutTTY := term.IsTerminal(int(stdout.Fd()))
+	isStderrTTY := term.IsTerminal(int(stderr.Fd()))
+	logger := newLogger(stderr, opts.quiet, isStderrTTY)
+
+	r := &runner{
+		stdin:       stdin,
+		stdout:      stdout,
+		stderr:      stderr,
+		logger:      logger,
+		isStdoutTTY: isStdoutTTY,
+		opts:        opts,
+	}
 
 	// Receiver: a single KEY with no file operands.
 	if len(opts.operands) == 1 && transport.IsKey(opts.operands[0]) {
@@ -81,7 +104,7 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		if target == "" {
 			target = "."
 		}
-		return runReceiver(opts.operands[0], target, stdout, stderr, isStdoutTTY)
+		return r.runReceiver(opts.operands[0], target)
 	}
 	if opts.targetSet {
 		return fmt.Errorf("--target is a receiver option: `catpult KEY [--target DIR]`")
@@ -104,28 +127,27 @@ func run(argv []string, stdin *os.File, stdout, stderr *os.File) error {
 		return fmt.Errorf("--watch requires file arguments: watch mode re-sends named files on change, it cannot watch a stdin stream")
 	}
 
-	expires := defaultExpires
+	r.expires = defaultExpires
 	if opts.expiresSet {
-		expires = opts.expires
+		r.expires = opts.expires
 	} else if opts.noExpiry {
-		expires = 0
+		r.expires = 0
 	}
 
-	relay := transport.Relay{}
 	if opts.derpSet {
-		relay.Endpoints = opts.derp
+		r.relay.Endpoints = opts.derp
 	} else if opts.derpmapSet {
-		relay.MapURL = opts.derpmap
+		r.relay.MapURL = opts.derpmap
 	}
 
 	switch {
 	case hasHyphen || stdinPiped:
-		return runSenderStream(expires, relay, stdin, stderr)
+		return r.runSenderStream()
 	case len(opts.operands) == 0:
 		usage(stderr)
-		return fmt.Errorf("no files specified; usage: catpult [--expires D | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
+		return fmt.Errorf("no files specified; usage: catpult [-q|--quiet] [--expires D | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE... | catpult KEY [--target DIR]")
 	default:
-		return runFileSender(expires, relay, opts.operands, stderr, opts.watch)
+		return r.runFileSender(opts.operands, opts.watch)
 	}
 }
 
@@ -183,6 +205,11 @@ func parseArgs(argv []string) (*options, error) {
 			// Boolean flag; only the bare form is accepted. `--watch=<x>`
 			// falls through to the unknown-flag error below.
 			opts.watch = true
+			i++
+		case a == "-q" || a == "--quiet":
+			// Boolean flag; only the bare form is accepted. `--quiet=<x>`
+			// falls through to the unknown-flag error below.
+			opts.quiet = true
 			i++
 		case a == "--derp":
 			if i+1 >= len(argv) {
@@ -271,7 +298,7 @@ func validateDERPMapURL(s string) error {
 // bookkeeping (recipient numbering, active-connection registry), invite
 // printing, and shutdown — active connections are closed before waiting
 // on handlers, so a stalled recipient cannot hang teardown.
-func runFileSender(expires time.Duration, relay transport.Relay, files []string, stderr *os.File, watch bool) error {
+func (r *runner) runFileSender(files []string, watch bool) error {
 	for _, f := range files {
 		fi, err := os.Stat(f)
 		if err != nil {
@@ -294,6 +321,7 @@ func runFileSender(expires time.Duration, relay transport.Relay, files []string,
 	var mu sync.Mutex
 	conns := make(map[net.Conn]struct{})
 	var served atomic.Int64
+	var filesSent atomic.Int64
 	// Handlers run for the life of their connection (the whole room in
 	// watch mode; until this recipient's transfer completes in file mode),
 	// so shutdown waits on them after closing the conns.
@@ -304,15 +332,13 @@ func runFileSender(expires time.Duration, relay transport.Relay, files []string,
 			return room.ServeWatchConn(conn, watcher, files, func(ev room.WatchEvent) {
 				switch ev.Kind {
 				case room.WatchSending:
-					fmt.Fprintf(stderr, "Sending %s (%d bytes)...\n", ev.Name, ev.Size)
+					// Watch updates are logged by the watcher change callback.
 				case room.WatchMissing:
-					fmt.Fprintf(stderr, "watched file %s is missing; skipping until it reappears\n", ev.Name)
+					r.logger.Log("warn", "watched file %s is missing; waiting for it to reappear", ev.Name)
 				}
 			})
 		}
-		return room.ServeFileConn(conn, files, func(name string, size int64) {
-			fmt.Fprintf(stderr, "Sending %s (%d bytes)...\n", name, size)
-		})
+		return room.ServeFileConn(conn, files, nil)
 	}
 
 	handler := func(conn net.Conn) {
@@ -327,23 +353,30 @@ func runFileSender(expires time.Duration, relay transport.Relay, files []string,
 			mu.Unlock()
 		}()
 		n := served.Add(1)
-		fmt.Fprintf(stderr, "recipient %d connected.\n", n)
+		r.logger.Log("room", "recipient %d connected", n)
 		if err := serve(conn); err != nil {
-			fmt.Fprintf(stderr, "recipient %d: %v\n", n, err)
+			if isDisconnectErr(err) {
+				r.logger.Log("room", "recipient %d disconnected", n)
+				return
+			}
+			r.logger.Log("room", "recipient %d: %v", n, err)
 			return
 		}
 		// No completion line in watch mode: the connection stays open for
 		// the next version until the room closes.
 		if !watch {
-			fmt.Fprintf(stderr, "sent %d file(s) to recipient %d.\n", len(files), n)
+			filesSent.Add(int64(len(files)))
+			r.logger.Log("room", "sent %d file(s) to recipient %d", len(files), n)
 		}
 	}
 
-	srv, addr, err := transport.NewServer(handler, relay)
+	srv, addr, err := transport.NewServer(handler, r.relay)
 	if err != nil {
 		return err
 	}
-	printInvite(stderr, string(addr), expires, relayDescription(relay))
+	r.logger.Log("room", "catpult room created")
+	r.printSenderInvite(string(addr), files)
+	r.logger.Log("room", "waiting for recipients...")
 	if watch {
 		recipientCount := func() int {
 			mu.Lock()
@@ -353,21 +386,21 @@ func runFileSender(expires time.Duration, relay transport.Relay, files []string,
 		// One line per detected change, regardless of how many recipients
 		// are watching (each handler supersedes its own in-flight transfer).
 		watcher.SetChangeCallback(func(name string) {
-			fmt.Fprintf(stderr, "%s changed; resending to %d recipient(s).\n", name, recipientCount())
+			rc := recipientCount()
+			if rc > 0 {
+				r.logger.Log("watch", "update %s (resending to %d recipient(s))", name, rc)
+			} else {
+				r.logger.Log("watch", "update %s (idle, 0 recipients)", name)
+			}
 		})
 		watcher.SetWarnCallback(func(format string, args ...any) {
-			fmt.Fprintf(stderr, format, args...)
+			r.logger.Log("warn", format, args...)
 		})
 		watcher.Start()
-		base := make([]string, len(files))
-		for i, f := range files {
-			base[i] = filepath.Base(f)
-		}
-		fmt.Fprintf(stderr, "Watch mode: re-sending %s whenever it/they change on disk. Recipients stay connected until the room closes.\n",
-			strings.Join(base, ", "))
+		r.logger.Log("watch", "watching %d file(s) for changes", len(files))
 	}
 
-	waitDone := waitForShutdown(expires)
+	waitDone := waitForShutdown(r.expires)
 
 	// Shutdown order: stop the watcher first so handlers' closing() gates
 	// flip and no new resend pass starts; then close every active
@@ -387,28 +420,40 @@ func runFileSender(expires time.Duration, relay transport.Relay, files []string,
 	defer cancel()
 	_ = srv.DrainTCP(drainCtx)
 	if err := srv.Close(); err != nil {
-		fmt.Fprintf(stderr, "closing room: %v\n", err)
+		r.logger.Log("room", "closing room: %v", err)
 	}
-	fmt.Fprintf(stderr, "room closed (%s).\n", waitDone)
+	if !watch {
+		r.logger.Log("room", "room closed (%s) — served %d recipient(s) total (%d file(s) transferred).", waitDone, served.Load(), filesSent.Load())
+	} else {
+		r.logger.Log("room", "room closed (%s) — served %d recipient(s) total.", waitDone, served.Load())
+	}
 	return nil
 }
 
 // --- sender: stream ---
 
-func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr *os.File) error {
+func (r *runner) runSenderStream() error {
 	bc := room.NewBroadcaster()
+	var served atomic.Int64
 	handler := func(conn net.Conn) {
-		n := bc.Count() + 1
+		n := served.Add(1)
+		r.logger.Log("room", "recipient %d connected", n)
 		if err := bc.Serve(conn); err != nil {
-			fmt.Fprintf(stderr, "recipient %d: %v\n", n, err)
+			if isDisconnectErr(err) {
+				r.logger.Log("room", "recipient %d disconnected", n)
+				return
+			}
+			r.logger.Log("room", "recipient %d: %v", n, err)
 		}
 	}
-	srv, addr, err := transport.NewServer(handler, relay)
+	srv, addr, err := transport.NewServer(handler, r.relay)
 	if err != nil {
 		return err
 	}
-	printInvite(stderr, string(addr), expires, relayDescription(relay))
-	fmt.Fprintf(stderr, "Reading stream from stdin (EOF does not close the room).\n")
+	r.logger.Log("room", "catpult room created")
+	r.printSenderInvite(string(addr), nil)
+	r.logger.Log("room", "waiting for recipients...")
+	r.logger.Log("stream", "reading stream from stdin (EOF does not close the room)")
 
 	done := make(chan struct{})
 	go func() {
@@ -419,7 +464,7 @@ func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr
 				return
 			default:
 			}
-			n, rerr := stdin.Read(buf)
+			n, rerr := r.stdin.Read(buf)
 			if n > 0 {
 				select {
 				case <-done:
@@ -430,9 +475,9 @@ func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr
 			}
 			if rerr != nil {
 				if rerr != io.EOF {
-					fmt.Fprintf(stderr, "reading stdin: %v\n", rerr)
+					r.logger.Log("stream", "reading stdin: %v", rerr)
 				} else {
-					fmt.Fprintf(stderr, "stdin closed; room stays open for late joiners until expiry or ^C.\n")
+					r.logger.Log("stream", "stdin closed; room stays open for late joiners until expiry or ^C")
 				}
 				bc.CloseInput()
 				return
@@ -440,7 +485,7 @@ func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr
 		}
 	}()
 
-	reason := waitForShutdown(expires)
+	reason := waitForShutdown(r.expires)
 
 	// os.Stdin.Close() does not reliably unblock a blocking Read on macOS or Linux.
 	// Temporarily ignore SIGINT so the kill doesn't terminate the process
@@ -456,15 +501,15 @@ func runSenderStream(expires time.Duration, relay transport.Relay, stdin, stderr
 	defer cancel()
 	_ = srv.DrainTCP(drainCtx)
 	if err := srv.Close(); err != nil {
-		fmt.Fprintf(stderr, "closing room: %v\n", err)
+		r.logger.Log("room", "closing room: %v", err)
 	}
-	fmt.Fprintf(stderr, "room closed (%s).\n", reason)
+	r.logger.Log("room", "room closed (%s) — served %d recipient(s) total.", reason, served.Load())
 	return nil
 }
 
 // --- receiver ---
 
-func runReceiver(key, target string, stdout, stderr *os.File, isStdoutTTY bool) error {
+func (r *runner) runReceiver(key, target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), transport.DialTimeout)
 	defer cancel()
 	conn, cl, err := transport.Dial(ctx, key)
@@ -472,11 +517,31 @@ func runReceiver(key, target string, stdout, stderr *os.File, isStdoutTTY bool) 
 		return err
 	}
 	defer cl.Close()
-	warnf := func(format string, args ...any) { fmt.Fprintf(stderr, format, args...) }
-	if err := room.Receive(conn, target, stdout, warnf, isStdoutTTY); err != nil {
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	defer stop()
+
+	go func() {
+		<-sigCtx.Done()
+		_ = conn.Close()
+		_ = cl.Close()
+	}()
+
+	warnf := func(format string, args ...any) {
+		r.logger.Log("warn", format, args...)
+	}
+	infof := func(format string, args ...any) {
+		r.logger.Log("recv", format, args...)
+	}
+	nFiles, err := room.Receive(conn, target, r.stdout, warnf, infof, r.isStdoutTTY)
+	if err != nil {
 		conn.Close()
 		if errors.Is(err, room.ErrRoomClosed) {
-			fmt.Fprintf(stderr, "room closed.\n")
+			r.logger.Log("room", "room closed.")
+			return nil
+		}
+		if sigCtx.Err() != nil {
+			r.logger.Log("room", "room closed (SIGTERM).")
 			return nil
 		}
 		return err
@@ -485,8 +550,30 @@ func runReceiver(key, target string, stdout, stderr *os.File, isStdoutTTY bool) 
 	drainCtx, dcancel := context.WithTimeout(context.Background(), time.Second)
 	defer dcancel()
 	_ = cl.DrainTCP(drainCtx)
-	fmt.Fprintf(stderr, "transfer completed.\n")
+	if nFiles > 0 {
+		r.logger.Log("recv", "received %d file(s).", nFiles)
+	} else {
+		r.logger.Log("recv", "transfer completed.")
+	}
 	return nil
+}
+
+func (r *runner) printSenderInvite(invite string, files []string) {
+	printSenderInvite(r.stdout, r.isStdoutTTY, r.opts.quiet, invite, files, r.expires, relayDescription(r.relay))
+}
+
+func isDisconnectErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "closed") ||
+		strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "reset by peer") ||
+		strings.Contains(s, "eof")
 }
 
 // --- lifecycle helpers ---
@@ -523,16 +610,39 @@ func relayDescription(relay transport.Relay) string {
 	return ""
 }
 
-func printInvite(stderr *os.File, invite string, expires time.Duration, relayDesc string) {
-	exp := "until ^C (no expiry)"
+func printSenderInvite(stdout io.Writer, isStdoutTTY, quiet bool, invite string, files []string, expires time.Duration, relayDesc string) {
+	if !isStdoutTTY || quiet {
+		fmt.Fprintln(stdout, invite)
+		return
+	}
+
+	fmt.Fprintf(stdout, "\nInvite:\n\n    %s\n\nShare this invite with recipients out of band.\n\n", invite)
+
+	if len(files) > 0 {
+		fmt.Fprintf(stdout, "Files (%d):\n", len(files))
+		for _, f := range files {
+			fi, err := os.Stat(f)
+			if err != nil {
+				fmt.Fprintf(stdout, "  • %s\n", filepath.Base(f))
+			} else {
+				fmt.Fprintf(stdout, "  • %s (%s)\n", filepath.Base(f), humanizeBytes(fi.Size()))
+			}
+		}
+		fmt.Fprintln(stdout)
+	} else {
+		fmt.Fprintf(stdout, "Stream: stdin\n\n")
+	}
+
 	if expires > 0 {
-		exp = "in " + humanizeDuration(expires)
+		expireAt := time.Now().Add(expires)
+		fmt.Fprintf(stdout, "Expires: in %s, at %s\n", humanizeDuration(expires), expireAt.Format("15:04:05"))
+	} else {
+		fmt.Fprintf(stdout, "Expires: until ^C (no expiry)\n")
 	}
-	fmt.Fprintf(stderr, "Catpult room created.\n")
 	if relayDesc != "" {
-		fmt.Fprintf(stderr, "\nRelay: %s\n", relayDesc)
+		fmt.Fprintf(stdout, "Relay: %s\n", relayDesc)
 	}
-	fmt.Fprintf(stderr, "\nExpires: %s\n\nInvite:\n%s\n\nShare this invite with recipients out of band.\n\nWaiting for recipients...\n", exp, invite)
+	fmt.Fprintln(stdout)
 }
 
 func humanizeDuration(d time.Duration) string {
@@ -569,23 +679,24 @@ func usage(w *os.File) {
 	fmt.Fprint(w, `catpult - share secrets securely over tailnet (no Catpult server)
 
 Sender (files):
-  catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
+  catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
 
 Sender (files, watch mode):
-  catpult --watch [--expires DURATION | --no-expiry] FILE...
+  catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] FILE...
   the room stays open and each FILE is re-sent to every connected
   recipient whenever it changes on disk (mtime+size polling, ~1s);
   a version in flight when the file changes is dropped and the new
   version re-sends from the start
 
 Sender (stdin stream):
-  catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
-  producer | catpult [--expires DURATION | --no-expiry]
+  catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
+  producer | catpult [-q|--quiet] [--expires DURATION | --no-expiry]
 
 Receiver:
-  catpult KEY [--target DIR]
+  catpult [-q|--quiet] KEY [--target DIR]
 
 Flags:
+  -q, --quiet   silence non-fatal status and progress output on stderr
   --expires D   room lifetime (Go duration, e.g. 10m, 1h); default 30m; 0 = until ^C
   --no-expiry   disable room expiry (equivalent to --expires=0; until ^C)
   --target DIR  receive directory (default: current directory)
@@ -603,7 +714,8 @@ Flags:
   -v, --version print version
 
 stdout carries payload output only (filenames in file mode, raw bytes in
-stream mode); all status, warnings, and errors go to stderr.
+stream mode; for senders, stdout outputs the room invite); all status,
+warnings, and errors go to stderr.
 Delivery is best effort: "sent" / "transfer completed", never "delivered".
 The invite is a secret bearer capability — share it out of band.
 `)

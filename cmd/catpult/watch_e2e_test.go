@@ -35,7 +35,7 @@ func TestWatchE2E(t *testing.T) {
 	}
 	senderCmd := exec.Command(bin, "--expires", "5m", "--watch", "watched.txt")
 	senderCmd.Dir = sendDir
-	senderStderr, err := senderCmd.StderrPipe()
+	senderStdout, err := senderCmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestWatchE2E(t *testing.T) {
 		senderCmd.Process.Kill()
 		senderCmd.Wait()
 	}()
-	invite := scanInvite(t, senderStderr)
+	invite := scanInvite(t, senderStdout)
 	t.Logf("invite: %s (%d bytes)", invite[:20]+"...", len(invite))
 
 	// Receiver: stays connected and rewrites the file in place per sent
@@ -86,8 +86,8 @@ func TestWatchE2E(t *testing.T) {
 		t.Fatalf("receiver failed: %v\nstderr: %s", err, errOut.String())
 	}
 
-	// Manifest lists the file once per delivered version.
-	if got, want := out.String(), "watched.txt\nwatched.txt\n"; got != want {
+	// In watch mode, manifest lists the file once (not per update).
+	if got, want := out.String(), "watched.txt\n"; got != want {
 		t.Fatalf("stdout manifest = %q, want %q", got, want)
 	}
 	if !strings.Contains(errOut.String(), "room closed.") {

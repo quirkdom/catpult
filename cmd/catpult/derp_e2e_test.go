@@ -73,18 +73,23 @@ func runDERPRelayE2E(t *testing.T, relayArgs, extraEnv []string) {
 	senderCmd := exec.Command(bin, append(relayArgs, "--expires", "5m", "msg.txt")...)
 	senderCmd.Dir = sendDir
 	senderCmd.Env = append(os.Environ(), extraEnv...)
-	senderStderr, err := senderCmd.StderrPipe()
+	senderStdout, err := senderCmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	var senderErrOut strings.Builder
+	senderCmd.Stderr = &senderErrOut
 	if err := senderCmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		senderCmd.Process.Kill()
 		senderCmd.Wait()
+		if t.Failed() {
+			t.Logf("sender stderr: %s", senderErrOut.String())
+		}
 	}()
-	invite := scanInvite(t, senderStderr)
+	invite := scanInvite(t, senderStdout)
 	t.Logf("invite: %s (%d bytes)", invite[:20]+"...", len(invite))
 
 	// Receiver: joins the room, relaying through the custom DERP server.
@@ -205,7 +210,7 @@ func plainHTTPFrontend(t *testing.T, ln net.Listener, h http.Handler) *httptest.
 	return s
 }
 
-// scanInvite reads the sender's stderr until the "tc..." invite line.
+// scanInvite reads the sender's stdout until the "tc..." invite line.
 func scanInvite(t *testing.T, r io.Reader) string {
 	t.Helper()
 	sc := bufio.NewScanner(r)
@@ -215,6 +220,6 @@ func scanInvite(t *testing.T, r io.Reader) string {
 			return line
 		}
 	}
-	t.Fatal("no invite found on sender stderr")
+	t.Fatal("no invite found on sender stdout")
 	return ""
 }

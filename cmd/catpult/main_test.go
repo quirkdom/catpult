@@ -328,3 +328,19 @@ func TestNoExpiryWithReceiverIsError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestQuietFlagParses(t *testing.T) {
+	for _, flag := range []string{"-q", "--quiet"} {
+		opts, err := parseArgs([]string{flag, "f.txt"})
+		if err != nil {
+			t.Fatalf("%s: parse failed: %v", flag, err)
+		}
+		if !opts.quiet {
+			t.Fatalf("%s: expected opts.quiet to be true", flag)
+		}
+	}
+	// The equals form is deliberately not supported.
+	if _, err := parseArgs([]string{"--quiet=true"}); err == nil {
+		t.Fatal("expected unknown-flag error for --quiet=true")
+	}
+}
