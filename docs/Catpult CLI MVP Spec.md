@@ -1,11 +1,15 @@
-# Catpult CLI MVP
+# Catpult CLI Contract
+
+> This started as the MVP contract and is updated to describe the current
+> implementation. Keep it aligned with `cmd/catpult/main.go` and
+> `internal/protocol/`.
 
 ## CLI
 
 ### Sender: files
 
 ```bash
-catpult [--expires DURATION | --no-expiry] [--derp URL] FILE...
+catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
 ```
 
 - Starts an ephemeral sending server.
@@ -15,6 +19,8 @@ catpult [--expires DURATION | --no-expiry] [--derp URL] FILE...
 - Continues accepting recipients until `--expires` or `^C` (with `--no-expiry`, only `^C`).
 - Received files are materialized by the recipient.
 - File arguments and stdin are mutually exclusive.
+- `--derp` and `--derpmap` are mutually exclusive sender options; the invite
+  carries the relay configuration for recipients.
 
 Example:
 
@@ -25,7 +31,7 @@ catpult --expires 10m foo.txt bar.txt
 ### Sender: files (watch mode)
 
 ```bash
-catpult --watch [--expires DURATION | --no-expiry] FILE...
+catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] FILE...
 ```
 
 - `--watch` selects watch mode; files only — combining it with `-` or
@@ -64,13 +70,13 @@ catpult --watch .env
 ### Sender: stdin
 
 ```bash
-catpult [--expires DURATION] -
+catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
 ```
 
 or equivalently:
 
 ```bash
-producer | catpult [--expires DURATION]
+producer | catpult [-q|--quiet] [--expires DURATION | --no-expiry]
 ```
 
 - `-` means read the payload from stdin, exactly like `cat`.
@@ -116,6 +122,9 @@ implements no custom relay protocol. Combining them is an error.
 ```bash
 catpult KEY [--target DIR]
 ```
+
+`-q` / `--quiet` may also be used to silence non-fatal status and progress
+messages on stderr.
 
 - Joins the room identified by `KEY`.
 - Blocks until the room expires, closes, or the client receives `^C`.

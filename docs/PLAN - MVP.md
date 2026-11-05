@@ -1,4 +1,9 @@
-# Catpult — Implementation Plan (MVP)
+# Catpult — Implementation Plan (MVP, historical)
+
+> Status: **implemented**. This document records the original build plan and
+> is retained for design history; unchecked boxes below are not a live task
+> list. For current behavior, see `Catpult CLI MVP Spec.md`, `README.md`, and
+> `AGENTS.md`. Watch mode and custom DERP support were added after this plan.
 
 Sources of truth:
 
@@ -18,8 +23,12 @@ Each step is hands-on; verify before moving on.
 - Recipient safety: validate filenames, reject absolute paths and `../`, never write outside `--target DIR`, never expose FS or exec.
 - Delivery is best-effort, no ACKs/receipts/queues. Every joiner while the room is alive gets the full payload (all files, or buffered + live stream bytes). Report `sent` / `transfer completed`, never `delivered`.
 - Invite (`tc...` Tailcat addr) is a secret bearer capability, not an "encryption key".
-- MVP scope only (spec §21 + CLI spec): sender file/stdin modes, `KEY [--target]`
-  receiver, `--expires`, stdout/stderr split, mode-mismatch warnings. Out of scope: accounts, auth, vaults, history, receipts, browser/WASM, custom DERP, `--direct-only`, `--name`, recipient→sender transfer, REPL, multi-room, daemon/IPC, mixed payloads.
+- Original MVP scope only (spec §21 + CLI spec): sender file/stdin modes,
+  `KEY [--target]` receiver, `--expires`, stdout/stderr split, mode-mismatch
+  warnings. Subsequent shipped additions include watch mode and custom DERP
+  configuration. Non-goals include accounts, auth, vaults, receipts,
+  browser/WASM, `--direct-only`, `--name`, recipient→sender transfer, REPL,
+  multi-room, daemon/IPC, and mixed payloads.
 - Do not run `go mod tidy` until code imports tailcat (currently `// indirect`); it will drop the pin.
 
 Local Tailcat reference: repo at `~/Developer/tailcat`, CLI at `/opt/homebrew/bin/tailcat`, full README via `tailcat readme`.

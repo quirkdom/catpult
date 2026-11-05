@@ -1,5 +1,11 @@
 # Catpult
 
+> **Status note (2026-11):** This document captures the original product and
+> protocol design, including phased proposals that are not all implemented.
+> Current CLI behavior is defined by `Catpult CLI MVP Spec.md`; watch mode and
+> custom DERP configuration are shipped additions. Do not treat the original
+> phase lists and MVP non-goals below as a current feature checklist.
+
 ## 1. Overview
 
 Catpult is an ephemeral, peer-to-peer tool for securely broadcasting arbitrary sensitive artifacts — especially `.env` files and development credentials — from one sender to one or more recipients.
@@ -64,7 +70,7 @@ CLI-only. Single-process sender model — there are no `create` / `join` / `send
 subcommands and no daemon/local IPC. The sender process is the room host; a
 second sender-side `send` process does not exist.
 
-Features:
+Original MVP features (later extended by watch mode and custom DERP):
 
 - sender: `catpult [--expires DURATION] FILE...` or stream mode
   (`catpult [--expires DURATION] -`, equivalently `producer | catpult [--expires DURATION]`)
@@ -87,7 +93,6 @@ Features:
 - no ACKs
 - no recipient identity/tracking
 - no browser
-- no custom DERP
 - no direct-only/paranoid mode
 - no recipient → sender artifact transfer
 
@@ -103,7 +108,6 @@ Add:
 - delivery/path status
 - direct-only ("paranoid") mode
 - detect whether recipient connection is direct or DERP-relayed
-- custom DERP configuration
 - better lifecycle/status UX
 
 ## Phase 3 — Pro
@@ -766,7 +770,11 @@ Tailcat is the transport.
 
 ---
 
-# 21. Explicit non-goals for MVP
+# 21. Explicit non-goals for the original MVP
+
+This is the original MVP scope list, not a complete list of current
+capabilities. Custom DERP support has since shipped; watch mode is also a
+post-MVP addition. See the CLI contract for current behavior.
 
 Do NOT implement:
 
@@ -783,7 +791,7 @@ Do NOT implement:
 - message history
 - custom cryptography
 - custom networking
-- custom relay infrastructure
+- custom relay infrastructure (since shipped; see §16)
 - DERP policy controls
 - browser support
 - automatic CLI launching from URLs
