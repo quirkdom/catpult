@@ -77,6 +77,21 @@ func TestTargetWithSenderIsError(t *testing.T) {
 	}
 }
 
+func TestToAliasesTarget(t *testing.T) {
+	for _, args := range [][]string{
+		{"--to", "inbox", "invite"},
+		{"--to=inbox", "invite"},
+	} {
+		opts, err := parseArgs(args)
+		if err != nil {
+			t.Fatalf("parseArgs(%q): %v", args, err)
+		}
+		if opts.target != "inbox" || !opts.targetSet {
+			t.Fatalf("parseArgs(%q) target = %q, targetSet = %t; want inbox, true", args, opts.target, opts.targetSet)
+		}
+	}
+}
+
 func TestMissingFileIsError(t *testing.T) {
 	stdout, stderr := devNullOut(t)
 	err := run([]string{"definitely-not-here-12345.txt"}, devNull(t), stdout, stderr)

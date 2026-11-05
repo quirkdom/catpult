@@ -176,7 +176,7 @@ func parseArgs(argv []string) (*options, error) {
 			opts.expires = d
 			opts.expiresSet = true
 			i += 2
-		case a == "--target":
+		case a == "--target" || a == "--to":
 			if i+1 >= len(argv) {
 				return nil, fmt.Errorf("flag %q requires a value", a)
 			}
@@ -191,8 +191,12 @@ func parseArgs(argv []string) (*options, error) {
 			opts.expires = d
 			opts.expiresSet = true
 			i++
-		case strings.HasPrefix(a, "--target="):
-			opts.target = strings.TrimPrefix(a, "--target=")
+		case strings.HasPrefix(a, "--target=") || strings.HasPrefix(a, "--to="):
+			if strings.HasPrefix(a, "--target=") {
+				opts.target = strings.TrimPrefix(a, "--target=")
+			} else {
+				opts.target = strings.TrimPrefix(a, "--to=")
+			}
 			opts.targetSet = true
 			i++
 		case a == "--no-expiry":
@@ -676,47 +680,42 @@ func isCharDevice(f *os.File) bool {
 }
 
 func usage(w *os.File) {
-	fmt.Fprint(w, `catpult - share secrets securely over tailnet (no Catpult server)
+	fmt.Fprint(w, `Catpult - send files and streams over direct, encrypted tunnels; no account required.
 
-Sender (files):
-  catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
+Send files and share the invite:
+  catpult [OPTIONS] FILE...
 
-Sender (files, watch mode):
-  catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] FILE...
-  the room stays open and each FILE is re-sent to every connected
-  recipient whenever it changes on disk (mtime+size polling, ~1s);
-  a version in flight when the file changes is dropped and the new
-  version re-sends from the start
+Keep files in sync while you edit them:
+  catpult --watch [OPTIONS] FILE...
 
-Sender (stdin stream):
-  catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
-  producer | catpult [-q|--quiet] [--expires DURATION | --no-expiry]
+Send a stream from a file or another command:
+  catpult [OPTIONS] -
+  producer | catpult [OPTIONS]
 
-Receiver:
-  catpult [-q|--quiet] KEY [--target DIR]
+Receive using the invite you were given:
+  catpult [--target DIR | --to DIR] INVITE
+
+Examples:
+  catpult report.pdf notes.txt       Share files; copy the printed invite
+  cat report.txt | catpult           Stream text from a command
+  catpult INVITE --target ./inbox    Save received files in ./inbox
+  catpult INVITE --to ./inbox        Same as --target
 
 Flags:
-  -q, --quiet   silence non-fatal status and progress output on stderr
-  --expires D   room lifetime (Go duration, e.g. 10m, 1h); default 30m; 0 = until ^C
-  --no-expiry   disable room expiry (equivalent to --expires=0; until ^C)
-  --target DIR  receive directory (default: current directory)
-  --derp HOSTS  use self-hosted DERP relay endpoint(s) for senders:
-                comma-separated host[:port] list (or [v6host]:port), TLS,
-                default port 443; when set no DERP map is fetched
-  --watch       file sender: keep the room open and re-send each FILE on
-                change; files only (no "-" or stdin); default expiry stays
-                30m; the receiver must also support watch mode
-  --derpmap URL fetch the DERP relay map from URL instead of the default
-                (alternative to --derp; sender option; the invite embeds
-                the chosen relay, so recipients need no relay config).
-                http and https are both accepted, as in tailcat
-  -h, --help    show this help
-  -v, --version print version
+  --expires DURATION  Close the room after this long (e.g. 10m, 1h; default 30m)
+  --no-expiry         Keep the room open until you stop it with Ctrl+C
+  --target, --to DIR  Save received files here (default: current directory)
+  --watch             Re-send named files when they change (file sending only)
+  --derp HOSTS        Use comma-separated self-hosted DERP hosts (sender only)
+  --derpmap URL       Use a custom DERP map URL instead of the default (sender only)
+  -q, --quiet         Hide routine status and progress messages
+  -h, --help          Show this help
+  -v, --version       Show the version
 
-stdout carries payload output only (filenames in file mode, raw bytes in
-stream mode; for senders, stdout outputs the room invite); all status,
-warnings, and errors go to stderr.
-Delivery is best effort: "sent" / "transfer completed", never "delivered".
-The invite is a secret bearer capability — share it out of band.
+Rooms stay open for 30 minutes by default. Use --expires or --no-expiry to
+change that. Senders print an invite to share; anyone with the invite can
+connect while the room is open. Keep the invite private.
+File names and status messages go to stdout/stderr as appropriate. Stream
+mode writes received bytes to stdout. Transfers are best effort.
 `)
 }

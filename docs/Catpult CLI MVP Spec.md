@@ -9,12 +9,14 @@ catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpma
 catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpmap URL] FILE...
 catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpmap URL] -
 producer | catpult [-q|--quiet] [--expires DURATION | --no-expiry]
-catpult [-q|--quiet] KEY [--target DIR]
+catpult [-q|--quiet] KEY [--target DIR | --to DIR]
 ```
 
-Value-taking flags accept either `--flag VALUE` or `--flag=VALUE`. `--quiet`, `--no-expiry`, and `--watch` are bare boolean flags. Options may appear before or after operands; `--` ends option parsing. `help`, `-h`, `--help`, `version`, `-v`, and `--version` are supported.
+Value-taking flags accept either `--flag VALUE` or `--flag=VALUE`. `--to` is an alias for receiver option `--target`, including the `--to=DIR` form. `--quiet`, `--no-expiry`, and `--watch` are bare boolean flags. Options may appear before or after operands; `--` ends option parsing. `help`, `-h`, `--help`, `version`, `-v`, and `--version` are supported.
 
 The default room lifetime is 30 minutes. `--expires` accepts a non-negative Go duration such as `10m` or `1h`; `0` disables expiry. `--no-expiry` is equivalent to zero. `--expires` and `--no-expiry` cannot be combined.
+
+`catpult --help` groups these forms by task (send files, watch files, send a stream, or receive an invite), includes common examples, and summarizes the main options. Senders print an invite to share with recipients; keep that invite private.
 
 ## Sending files
 
@@ -42,7 +44,7 @@ At stdin EOF, connected recipients receive the remaining queued bytes and a stre
 
 ## Receiving
 
-The receiver connects using the invite key. It does not consume stdin; `something | catpult KEY` is an error. `--target DIR` selects the receive directory and defaults to the current directory. Missing target directories are created. Received files use mode `0600`; path validation and rooted filesystem operations confine writes to the target.
+The receiver connects using the invite key. It does not consume stdin; `something | catpult KEY` is an error. `--target DIR` (or its alias `--to DIR`) selects the receive directory and defaults to the current directory. Missing target directories are created. Received files use mode `0600`; path validation and rooted filesystem operations confine writes to the target.
 
 File mode writes filenames to stdout, one per successfully completed file. Watch mode prints each filename on its first received version; update notices go to stderr. Stream mode writes raw bytes to stdout. For example:
 
