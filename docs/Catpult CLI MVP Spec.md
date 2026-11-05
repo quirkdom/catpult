@@ -1,227 +1,67 @@
 # Catpult CLI Contract
 
-> This started as the MVP contract and is updated to describe the current
-> implementation. Keep it aligned with `cmd/catpult/main.go` and
-> `internal/protocol/`.
+This page describes current user-visible CLI behavior. Update it with any change to command syntax, output, or lifecycle. Architecture and implementation details live in [`architecture/`](architecture/README.md); the implementation is in [`cmd/catpult/main.go`](../cmd/catpult/main.go).
 
-## CLI
+## Commands
 
-### Sender: files
-
-```bash
-catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
-```
-
-- Starts an ephemeral sending server.
-- Prints the room invite/key.
-- Waits for recipients.
-- Every recipient that joins receives **all files**.
-- Continues accepting recipients until `--expires` or `^C` (with `--no-expiry`, only `^C`).
-- Received files are materialized by the recipient.
-- File arguments and stdin are mutually exclusive.
-- `--derp` and `--derpmap` are mutually exclusive sender options; the invite
-  carries the relay configuration for recipients.
-
-Example:
-
-```bash
-catpult --expires 10m foo.txt bar.txt
-```
-
-### Sender: files (watch mode)
-
-```bash
-catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] FILE...
-```
-
-- `--watch` selects watch mode; files only — combining it with `-` or
-  piped stdin is an error, and using it with a KEY is an error (the
-  receiver needs no flag: the room announces watch semantics itself).
-- The file set is fixed: only the `FILE...` passed at room creation is
-  watched; files that appear later are ignored.
-- The default expiry stays **30m**; `--expires` overrides, `0` or
-  `--no-expiry` = until `^C`.
-- Recipient connections are never closed while the room is alive: each
-  watched file is re-sent to every connected recipient whenever its
-  `mtime`+`size` changes on disk (polled about once a second; detection
-  latency ≤ poll interval). A `touch` with unchanged contents also
-  triggers a re-send.
-- A version still in flight to a recipient when its file changes is
-  dropped at a chunk boundary and replaced by a fresh version starting
-  at the first byte; recipients converge on the latest contents.
-- Consecutive rapid changes may coalesce into one re-send per poll.
-- The sender marks the end of the initial file pass in the protocol, so
-  the receiver reports “waiting for updates” only after that pass is
-  explicitly complete (never based on an idle timeout).
-- A watched file that disappears is skipped (logged once) until it
-  reappears, e.g. via an editor's atomic save.
-- The room's end is delivered to each connected recipient exactly like
-  file mode: the sender closes the connection when its serving ends
-  (watch serving ends only at room close or recipient disconnect), the
-  receiver maps EOF to `room closed.`, then the sender prints
-  `room closed (reason).`
-
-Example:
-
-```bash
-catpult --watch .env
-```
-
-### Sender: stdin
-
-```bash
-catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
-```
-
-or equivalently:
-
-```bash
+```text
+catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpmap URL] FILE...
+catpult --watch [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpmap URL] FILE...
+catpult [-q|--quiet] [--expires DURATION | --no-expiry] [--derp HOSTS | --derpmap URL] -
 producer | catpult [-q|--quiet] [--expires DURATION | --no-expiry]
+catpult [-q|--quiet] KEY [--target DIR]
 ```
 
-- `-` means read the payload from stdin, exactly like `cat`.
-- Starts an ephemeral sending server and prints the invite/key.
-- Incoming bytes are buffered in server cache.
-- Recipients may join at any time and receive the buffered bytes followed by subsequent bytes.
-- Every recipient receives the same byte stream.
-- File arguments cannot be combined with `-`.
-- `producer | catpult FILE` is invalid.
+Value-taking flags accept either `--flag VALUE` or `--flag=VALUE`. `--quiet`, `--no-expiry`, and `--watch` are bare boolean flags. Options may appear before or after operands; `--` ends option parsing. `help`, `-h`, `--help`, `version`, `-v`, and `--version` are supported.
 
-### Custom DERP relay
+The default room lifetime is 30 minutes. `--expires` accepts a non-negative Go duration such as `10m` or `1h`; `0` disables expiry. `--no-expiry` is equivalent to zero. `--expires` and `--no-expiry` cannot be combined.
 
-The sender's two modes extend with custom relay options:
+## Sending files
 
-```bash
-catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] FILE...
-catpult [--expires DURATION | --no-expiry] [--derp H[,H...]] [--derpmap URL] -
-```
+Named files must be regular files. Each recipient connection receives the named files in order, served from disk. The receiver writes each file under its basename. The sender continues to accept recipients until expiry or sender shutdown (`Ctrl+C`/termination signal).
 
-Two disjoint mechanisms, at most one per room:
+File arguments and stdin are mutually exclusive. `producer | catpult FILE` and `catpult - FILE` are errors.
 
-- `--derp H[,H...]` — self-hosted relay endpoint(s): comma-separated
-  `host[:port]` entries (or `[v6host]:port`), DERP over TLS on the given
-  port (default 443). When set, no DERP map is fetched at all; this
-  follows Tailcat's `genkey --region` comma-separated-hostname mechanism.
-- `--derpmap URL` — fetch the room's bootstrap relay from the JSON DERP
-  map at `URL` instead of the default map; otherwise as Tailcat's
-  `--derpmap-url`. Both `http` and `https` are accepted (Tailcat imposes
-  no https-only policy; the map is trusted infrastructure config).
+## Watching files
 
-Both are sender options using Tailcat's supported mechanisms; Catpult
-implements no custom relay protocol. Combining them is an error.
+`--watch` keeps each recipient connected and resends the named files when their mtime or size changes. Detection polls about once per second; `touch` can trigger a resend. The initial watched path set is fixed; new paths are not discovered. Missing files are skipped until they reappear. A change during a send aborts that version at a chunk boundary and restarts from the beginning; rapid changes may coalesce.
 
-- The chosen relay's details are embedded in the invite, so receivers take
-  no relay flags. Using `--derp`/`--derpmap` with a KEY is an error.
-- Self-hosted relay endpoints must present a valid TLS certificate for
-  their hostname.
-- Direct and DERP-relayed paths are equally encrypted; see the
-  product spec (§16) for trust semantics.
+The receiver needs no watch flag: the room announces watch mode. It prints a filename to stdout after the first successfully received version of that file; later versions are reported on stderr. It remains connected until the room closes or the receiver disconnects. Watch mode accepts only named files, not stdin or a receiver key.
 
-### Receiver
+## Sending stdin
 
-```bash
-catpult KEY [--target DIR]
-```
+Use `-` or pipe stdin. Input is opaque bytes. Catpult retains a rolling 64 MiB in-memory history for late joiners and sends live chunks to connected recipients. Older bytes are evicted when the limit is exceeded.
 
-`-q` / `--quiet` may also be used to silence non-fatal status and progress
-messages on stderr.
+At stdin EOF, connected recipients receive the remaining queued bytes and a stream-end marker. Late joiners can receive the retained history and then the end marker. EOF does not close the room; it remains open until expiry or sender shutdown.
 
-- Joins the room identified by `KEY`.
-- Blocks until the room expires, closes, or the client receives `^C`.
-- Receiver does not consume stdin.
-- `--target` specifies the directory for received files; default is the current working directory.
+## Relays
 
-#### Receiving files
+`--derp HOSTS` configures one or more self-hosted DERP endpoints, comma-separated as `host[:port]` or `[IPv6]:port`; the default port is 443. Values are hostnames or IPs, not URLs. Tailcat uses DERP over TLS, and endpoints need valid certificates for their hostnames. This mode supplies a relay region directly instead of fetching a DERP map.
 
-Files are written to the target directory.
+`--derpmap URL` uses an alternate JSON DERP map URL. Both `http` and `https` schemes are accepted. `--derp` and `--derpmap` are mutually exclusive sender options, including in watch mode. The invite carries the selected relay configuration, so receivers do not need relay flags. Direct and DERP-relayed connections use Tailcat's encrypted transport; neither mode guarantees a direct network path.
 
-Their filenames are emitted to stdout, one per line, after successful receipt.
+## Receiving
 
-Thus:
+The receiver connects using the invite key. It does not consume stdin; `something | catpult KEY` is an error. `--target DIR` selects the receive directory and defaults to the current directory. Missing target directories are created. Received files use mode `0600`; path validation and rooted filesystem operations confine writes to the target.
 
-```bash
-catpult KEY
-```
+File mode writes filenames to stdout, one per successfully completed file. Watch mode prints each filename on its first received version; update notices go to stderr. Stream mode writes raw bytes to stdout. For example:
 
-prints:
-
-```text
-foo.txt
-bar.txt
-```
-
-while creating:
-
-```text
-./foo.txt
-./bar.txt
-```
-
-If stdout is piped/redirected, the same filename manifest is emitted.
-
-The same contract holds in watch mode: the receiver stays connected and
-prints the filename to stdout **each time a fully received version
-lands** (once per version), with a stderr note marking subsequent
-versions as updates; `room closed.` on stderr ends the session when the
-sender's room closes, so `catpult KEY | ...` style observers see every
-update.
-
-#### Receiving a stream
-
-The received bytes are written directly to stdout.
-
-Therefore:
-
-```bash
+```sh
+catpult KEY --target ./received
+catpult KEY > output.bin
 catpult KEY | command
-catpult KEY > output
 ```
 
-are valid and composable.
+The receiver exits after a finite file transfer, stream end/connection closure, room closure, or local shutdown signal. Watch receivers stay connected until room closure or disconnect.
 
-Receiver stdin is never consumed:
+## Output and errors
 
-```bash
-something | catpult KEY
-```
+Receiver stdout contains filenames in file mode or raw bytes in stream mode. Sender stdout contains the invite: a one-line invite when stdout is not a terminal or `--quiet` is set; otherwise a formatted invite summary. Human status, warnings, and errors go to stderr. `--quiet` suppresses non-fatal status and progress messages on stderr; it does not suppress the invite or errors.
 
-is invalid.
+The receiver warns on stderr when its stdout context may be surprising: file mode with redirected/piped stdout (which receives filenames), or stream mode with terminal stdout (which receives raw bytes). Warnings do not block pipelines or ask for confirmation.
 
-## stdout / stderr
+Delivery is best effort. Catpult reports `sent`, `received`, or `transfer completed`; it does not provide delivery receipts or prove that a recipient retained a file. The invite is a secret bearer capability: share it out of band.
 
-- **stdout:** payload output:
-  - file mode → received filenames
-  - stream mode → raw received bytes
-- **stderr:** human-facing status, progress, warnings, and errors.
-- Sender stdout/stderr may freely be piped or redirected.
+## Out of scope
 
-## Mode mismatch warnings
-
-The receiver knows the payload type from the room.
-
-If the receiver's output context may be surprising, warn on stderr before delivery, e.g.:
-- file sender + piped/redirected receiver → stdout contains filenames, not file contents.
-- stream sender + terminal receiver → raw bytes will be written to the terminal.
-
-Interactive confirmation may be used when appropriate; non-interactive pipelines must not be blocked waiting for confirmation.
-
-## Lifecycle
-
-Sender server closes on the first of:
-- `^C`
-- expiry
-- ~~stdin EOF **for stream mode**, if the chosen MVP semantics treat EOF as completion.~~
-
-Receiver exits on:
-- `^C`
-- room closure/expiry
-- completion of a finite transfer.
-
-## Explicitly out of scope
-
-- REPL.
-- Multi-room management.
-- Persistent delivery / `--files`.
-- Room administration/status commands.
-- Daemon/local IPC.
-- Mixing file and stream payloads in one room.
+Accounts, authentication services, persistent delivery/history, multi-room management, a daemon or local IPC, mixing files and streams in one room, browser/WASM support, direct-only mode, recipient-to-sender transfer, and remote execution are outside the current CLI contract.

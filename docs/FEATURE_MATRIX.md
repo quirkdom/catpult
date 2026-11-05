@@ -69,7 +69,7 @@ The initial MVP plus subsequent watch and custom DERP additions are implemented:
 - **Simple command:** `catpult [--expires 10m] file1.env file2.pem`
 - **Receiver:** `catpult KEY [--target ./destination]`
 - **Late joiners:** Anyone holding the key can connect anytime before expiry and receive the full batch of files.
-- **Clean output:** Filenames (and only filenames) are emitted to `stdout`, making scripts like `catpult KEY | xargs -n1 process` work reliably. All progress, status, and keys stay on `stderr`.
+- **Clean output:** Receiver stdout carries filenames in file mode or raw bytes in stream mode, making pipelines composable. Sender stdout carries the invite; progress, status, and warnings go to stderr.
 
 ### 🟢 Streaming Mode
 - **Simple command:** `catpult -` or `tail -f app.log | catpult`

@@ -115,7 +115,7 @@ catpult --watch .env
 
 - Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry — the default `30m` applies; `--expires` or `--no-expiry` overrides, `0` = until `Ctrl+C`).
 - A version still transferring when the file changes is dropped and the new version starts over, so recipients always converge on the latest contents.
-- The receiver prints the filename each time a version lands later.
+- The receiver prints a filename on the first received version; later update notices go to `stderr`.
 - Watch mode is files-only: it cannot be combined with `-` / piped stdin.
 
 ### Receiving Files
@@ -161,8 +161,11 @@ catpult KEY | jq .
 ## 💡 Built for the Command Line
 
 Catpult follows the classic Unix philosophy:
-- **`stdout` (standard output)** carries only your data: saved filenames in file mode, or raw bytes in stream mode. This means commands like `catpult KEY | xargs ...` work smoothly.
-- **`stderr` (standard error)** carries human messages: your invite keys, progress notices, connection status, and warnings.
+- **Receiver `stdout`** carries filenames in file mode or raw bytes in stream mode. This keeps commands like `catpult KEY | xargs ...` composable.
+- **Sender `stdout`** carries the invite. In quiet mode it prints only the one-line invite, so you can pipe it into another command, for example `catpult --quiet .env | head -n 1 | pbcopy` on macOS.
+- **`stderr`** carries human status, progress, warnings, and errors. `--quiet` suppresses non-fatal messages, not errors or the invite.
+
+The sender keeps running after printing the invite. In the clipboard example, `head -n 1` passes that line to `pbcopy` and closes the pipe while the room remains active.
 - **Smart warnings:** If you accidentally stream binary data directly to your terminal screen, Catpult warns you on `stderr` without breaking your automated scripts.
 
 ---
@@ -182,6 +185,8 @@ Catpult follows the classic Unix philosophy:
 
 Curious about what's coming in future releases (like web browser support, peer tracking, and direct-only modes)? Check out our comprehensive [Feature Matrix & Roadmap](docs/FEATURE_MATRIX.md).
 
+For implementation boundaries and data flow, see the [architecture docs](docs/architecture/README.md). They are the source of truth for current architecture and should be updated with any behavior-changing code change.
+
 ---
 
 ## ❤️ Credits
@@ -192,6 +197,4 @@ Catpult is built on top of [Tailcat](https://github.com/tailscale/tailcat), crea
 
 ## 📄 License
 
-Source copyright applies for now. You have express rights and permission to build, run, and use Catpult however you wish.
-
-*Provided as-is, without warranty or liability.*
+Catpult is licensed under the [BSD 3-Clause License](LICENSE), the same license used by Tailcat.
