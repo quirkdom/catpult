@@ -4,7 +4,7 @@
 
 Ever needed to send a `.env` file, an SSH key, or a certificate to a teammate, but didn't want to paste it into Slack, email it, or upload it to Google Drive?
 
-Catpult lets you send files and live terminal streams directly from your computer to someone else's. There are **no accounts**, **no central servers**, and **no cloud storage**. Everything travels over an encrypted WireGuard tunnel, and the moment you close Catpult, the transfer room vanishes without a trace.
+Catpult lets you send files and live terminal streams from your computer to someone else's. There are **no accounts**, **no Catpult-operated storage or backend**, and **no cloud storage**. Traffic uses Tailcat's encrypted WireGuard transport and may use DERP relays when a direct connection is unavailable. The room ends when the sender exits or its expiry is reached; this does not guarantee secure deletion of data already received.
 
 ---
 

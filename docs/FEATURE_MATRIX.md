@@ -2,7 +2,7 @@
 
 Welcome to the **Catpult Feature Matrix**!
 
-Catpult is an ephemeral, peer-to-peer transfer tool for sharing sensitive files (`.env`, certificates, tokens) and live byte streams directly between machines with **zero central servers**.
+Catpult is an ephemeral, peer-to-peer transfer tool for sharing files and live byte streams. It has no Catpult-operated backend or storage; Tailcat may use DERP relays for network connectivity.
 
 This document serves as both a **public feature tracker** and a **project management roadmap**. Whether you're using Catpult today or contributing code, this guide explains what's working right now, what's planned next, and what is intentionally kept out of scope to preserve Catpult's speed and security.
 
@@ -12,7 +12,7 @@ This document serves as both a **public feature tracker** and a **project manage
 
 | Status | Meaning |
 | :--- | :--- |
-| 🟢 **Available Now** | Fully implemented, tested, and shipped in the MVP (v0.1). |
+| 🟢 **Available Now** | Implemented in the current source tree. |
 | 🟡 **On the Cards** | Actively planned for upcoming phases (Phase 2 & Phase 3). |
 | ⚪ **In Limbo / Under Evaluation** | Interesting possibilities, but pending upstream support or design review. |
 | 🚫 **Not Feasible / Non-Goal** | Intentionally out of scope to protect simplicity, privacy, or architecture. |
@@ -33,18 +33,19 @@ This document serves as both a **public feature tracker** and a **project manage
 | | Late-joiner stream playback | 🟢 Available | Replays in-memory buffer (up to 64 MiB) plus live tail. |
 | | Raw stdout byte streaming | 🟢 Available | Composable with pipes (`catpult KEY \| cmd` or `> out`). |
 | **Room Lifecycle** | Ephemeral host model | 🟢 Available | Sender is the host; no server remains after sender exits. |
+| | Quiet status output (`-q`, `--quiet`) | 🟢 Available | Suppresses non-fatal status and progress output on stderr. |
 | | Configurable TTL (`--expires`) | 🟢 Available | Auto-close after duration (`10m`, `1h`, default `30m`, `0` = until `^C`). |
 | | Graceful shutdown & TCP drain | 🟢 Available | Sender drains open connections cleanly before exiting. |
 | **Security & Safety** | WireGuard P2P encryption | 🟢 Available | Backed by Tailcat Go library with automatic NAT traversal & DERP relay. |
 | | Path traversal protection | 🟢 Available | Strict sanitization; blocks `../`, absolute paths, and null bytes. |
 | | Restricted permissions & cleanup | 🟢 Available | Writes files with `0600`; partial/interrupted files are removed. |
-| | Strict protocol framing & caps | 🟢 Available | `EGAD` magic, 1 MiB frame cap, 100 MiB file cap, idle deadlines. |
+| | Strict protocol framing & caps | 🟢 Available | `EGAD` magic, 1 MiB frame cap, 4 KiB header cap, 255-byte filename cap; files stream in chunks. |
 | | Mode mismatch warnings | 🟢 Available | Warns on stderr (e.g. streaming to terminal) without blocking pipes. |
 | **Peer & UX (Phase 2)** | Recipient display names | 🟡 On the cards | Optional client name sharing (`Alice's laptop`). |
 | | Recipient connection tracking | 🟡 On the cards | Ephemeral host visibility into connected and active peers. |
 | | Transfer progress & status UI | 🟡 On the cards | Richer stderr progress indicators during large transfers. |
 | | Direct-only ("paranoid") mode | 🟡 On the cards | `--direct-only` flag to block transfers over DERP relays. |
-| | Custom DERP configuration | 🟢 Available | Two disjoint mechanisms per suite demo: `--derp H[,H...]` names self-hosted relay endpoints directly (no map fetch, tailcat `--region` style), `--derpmap URL` fetches a custom JSON DERP map. The invite embeds the chosen relay, so receivers need no config. Verified end-to-end against a local DERP server in `cmd/catpult/derp_e2e_test.go`. |
+| | Custom DERP configuration | 🟢 Available | `--derp H[,H...]` uses explicit endpoints; `--derpmap URL` fetches a JSON map. Mutually exclusive sender options; relay configuration is carried in the invite. |
 | **Reach (Phase 3)** | Static browser receiver | 🟡 On the cards | In-browser receiver via Tailcat WASM (`https://host/#<key>`). |
 | | Ephemeral replay buffer controls | 🟡 On the cards | Configurable buffer sizes for pastebin-style workflows. |
 | | Package manager distributions | 🟡 On the cards | Homebrew, Scoop, and signed release archives. |
@@ -60,9 +61,9 @@ This document serves as both a **public feature tracker** and a **project manage
 
 ---
 
-## 2. Deep Dive: What's Available Now (MVP)
+## 2. Deep Dive: What's Available Now
 
-The MVP is complete, robust, and designed around Unix simplicity and defensive coding:
+The initial MVP plus subsequent watch and custom DERP additions are implemented:
 
 ### 🟢 Multi-File Mode
 - **Simple command:** `catpult [--expires 10m] file1.env file2.pem`
