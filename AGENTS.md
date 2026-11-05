@@ -2,7 +2,7 @@
 
 ## Build / verify
 
-Requires Go 1.27+ (`go version` → `go1.27.1 darwin/arm64`).
+Requires Go 1.27+ (check via `go version`).
 
 ```sh
 make build       # host binary -> ./catpult
@@ -27,7 +27,7 @@ go vet ./...
 go test ./...   # tests exist in internal/protocol, internal/room, cmd/catpult
 ```
 
-Module `catpult`. Tailcat is now a direct dependency (`github.com/tailscale/tailcat v0.6.0`).
+Module `catpult`. Tailcat is now a direct dependency (`github.com/tailscale/tailcat v0.7.0`).
 
 ## Releasing
 
@@ -42,13 +42,13 @@ See [`RELEASING.md`](RELEASING.md) for the end-to-end release process: cutting a
 - `internal/room/` — room lifecycle (`sender_file.go`, `sender_stream.go`, `watch.go`, `receiver.go`, `safety_utils.go`, `room_test.go`). Handles file serving (shared chunk writer `writeFile` with optional change-abort hook), streaming broadcaster, watch mode (`FileWatcher` poller ~1s mtime+size detection, `ServeWatchConn` keep-open re-sender; watch uses file-mode closing semantics — the handler closes its conn when its serving ends), receiving with path validation.
 - `docs/Catpult CLI MVP Spec.md` — current user-visible CLI contract; update it when command syntax, output, or lifecycle changes.
 - `docs/architecture/` — current implementation source of truth: system overview, sender modes, receiver modes, wire protocol, and Tailcat transport boundary. **Any code change that alters behavior or architecture must update the relevant architecture doc in the same change.** If behavior disagrees with these docs, fix the docs or code before merging; keep examples and links anchored to current source paths.
-- `go.mod` / `go.sum` — `catpult`; `tailcat` direct; `go 1.27.1`.
+- `go.mod` / `go.sum` — `catpult`; `tailcat` direct; `go 1.27.3`.
 
 `internal/` is no longer empty: protocol, transport, and room packages implemented.
 
 ## Tailcat reference (local)
 
-- Tailcat repo cloned at `~/Developer/tailcat` — read Go API source there.
+- Tailcat repo clone might be available at `../tailcat` — read Go API source there. Alternatively the repo is available at https://github.com/tailscale/tailcat
 - `tailcat` CLI installed (`/opt/homebrew/bin/tailcat`). Use `tailcat readme`.
 
 ## Architecture invariants (unchanged — do not violate)

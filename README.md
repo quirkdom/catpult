@@ -1,10 +1,12 @@
+![catpult.png](catpult.png "Catpult")
+
 # 🐱 Catpult
 
 **The easiest, safest way to send secrets and files directly peer-to-peer.**
 
 Ever needed to send a `.env` file, an SSH key, or a certificate to a teammate, but didn't want to paste it into Slack, email it, or upload it to Google Drive?
 
-Catpult lets you send files and live terminal streams from your computer to someone else's. There are **no accounts**, **no Catpult-operated storage or backend**, and **no cloud storage**. Traffic uses Tailcat's encrypted WireGuard transport and may use DERP relays when a direct connection is unavailable. The room ends when the sender exits or its expiry is reached; this does not guarantee secure deletion of data already received.
+Catpult lets you send files and live terminal streams from your computer to someone else's. There are **no accounts**, **no Catpult-operated storage or backend**, and **no cloud storage**. Traffic uses [Tailcat](https://github.com/tailscale/tailcat)'s encrypted WireGuard transport and may use DERP relays when a direct connection is unavailable. The room ends when the sender exits or its expiry is reached; this does not guarantee secure deletion of data already received.
 
 ---
 
@@ -113,7 +115,7 @@ Keep a room open and re-send a file to every connected recipient whenever it cha
 catpult --watch .env
 ```
 
-- Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry — the default `30m` applies; `--expires` or `--no-expiry` overrides, `0` = until `Ctrl+C`).
+- Recipients stay connected: each version they receive replaces the previous one, and the receiver keeps receiving until the room closes (`Ctrl+C` on the sender, or expiry. The default is `30m`; use `--expires` to override that. To keep it running forever (until `Ctrl+C`) provide a value of `0`, or use `--no-expiry`.
 - A version still transferring when the file changes is dropped and the new version starts over, so recipients always converge on the latest contents.
 - The receiver prints a filename on the first received version; later update notices go to `stderr`.
 - Watch mode is files-only: it cannot be combined with `-` / piped stdin.
@@ -172,8 +174,8 @@ The sender keeps running after printing the invite. In the clipboard example, `h
 
 ## 🔒 How Catpult Keeps You Safe
 
-- **End-to-End Encryption:** Traffic travels over WireGuard tunnels created with [Tailcat](https://github.com/tailscale/tailcat). If two computers cannot connect directly due to strict firewalls, traffic is securely relayed through encrypted relay nodes (DERP)—even the relay node cannot read your data.
-- **Bring Your Own Relay:** Organizations that don't want to depend on public relay infrastructure can point a room at their own relay — either via `--derp` (self-hosted endpoint hostnames) or `--derpmap` (a full JSON DERP map), both sender options. The chosen relay's details are embedded in the invite, so recipients need no extra configuration — and the WireGuard encryption is identical either way.
+- **End-to-End Encryption:** Traffic travels over WireGuard tunnels created with Tailcat. If two peers cannot connect directly due to strict firewalls, traffic is securely relayed through encrypted relay nodes (DERP) - even the relay node cannot read your data.
+- **Bring Your Own Relay:** Organizations that don't want to depend on public relay infrastructure can point a room at their own relay - either via `--derp` (self-hosted endpoint hostnames) or `--derpmap` (a full JSON DERP map), both sender options. The chosen relay's details are embedded in the invite, so recipients need no extra configuration - and the WireGuard encryption is identical either way.
 - **Secret Invites:** The invite key (`tc...`) is a temporary pass. Only people who have the key can connect.
 - **Strict Folder Guardrails:** Senders cannot sneak files into other folders on your computer. Catpult strictly blocks directory traversal tricks (`../`), absolute paths, and null bytes. Everything stays confined to your `--target` folder.
 - **Clean Incomplete Transfers:** If a transfer is interrupted midway, partial files are automatically removed so you never end up with corrupted files.
@@ -191,7 +193,7 @@ For implementation boundaries and data flow, see the [architecture docs](docs/ar
 
 ## ❤️ Credits
 
-Catpult is built on top of [Tailcat](https://github.com/tailscale/tailcat), created by Brad Fitzpatrick and the team at Tailscale.
+Catpult is built on top of Tailcat, created by Brad Fitzpatrick and the team at Tailscale.
 
 ---
 
